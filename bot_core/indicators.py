@@ -494,9 +494,7 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
 
     zones = []
     for t, items in by_type.items():
-        # sort items by price ascending (for supports) or descending (for resistances)
-        # but grouping is price-based, chronological order not required
-        # We'll iterate in order of appearance so zones are stable
+        # iterate swings for this type and group by relative proximity
         for swing in items:
             price = float(swing["price"])
             idx = int(swing.get("index", -1))
@@ -506,11 +504,13 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
                     continue
                 center = zone["center"]
                 # relative tolerance: abs(price - center) / center <= price_tolerance
+                # allow a tiny epsilon to tolerate floating-point and near-boundary cases
                 if center == 0:
                     rel = abs(price - center)
                 else:
                     rel = abs(price - center) / float(center)
-                if rel <= price_tolerance:
+                eps = 1e-12
+                if rel <= price_tolerance + eps:
                     # add to existing zone
                     zone["prices"].append(price)
                     zone["indices"].append(idx)
@@ -531,6 +531,7 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
                     "max_price": price,
                     "count": 1,
                 })
+
 
     # finalize zones and compute strength
     result = []
