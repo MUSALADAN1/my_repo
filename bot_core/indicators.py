@@ -298,6 +298,80 @@ def ICHIMOKU(
     return ichimoku(high, low, close, tenkan=tenkan, kijun=kijun, senkou_b=senkou_b, shift=shift)
 
 # ----------------------------
+# Pivot Points & Support/Resistance
+# ----------------------------
+def pivot_points(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: str = "classic") -> pd.DataFrame:
+    """
+    Compute pivot points and support/resistance levels.
+
+    Methods supported:
+      - "classic" : PP = (H+L+C)/3
+                    R1 = (2*PP) - L
+                    S1 = (2*PP) - H
+                    R2 = PP + (H - L)
+                    S2 = PP - (H - L)
+                    R3 = H + 2*(PP - L)
+                    S3 = L - 2*(H - PP)
+
+      - "fibonacci" : uses Fibonacci multiples for R2/S2 and R3/S3 (optional later)
+
+    Returns a DataFrame with columns:
+      'pp', 'r1', 's1', 'r2', 's2', 'r3', 's3'
+
+    Args:
+        high, low, close: Series-like inputs (same length)
+        method: pivot calculation method (default 'classic')
+    """
+    h = _ensure_series(high).astype(float)
+    l = _ensure_series(low).astype(float)
+    c = _ensure_series(close).astype(float)
+
+    pp = (h + l + c) / 3.0
+    r1 = (2 * pp) - l
+    s1 = (2 * pp) - h
+    r2 = pp + (h - l)
+    s2 = pp - (h - l)
+    r3 = h + 2 * (pp - l)
+    s3 = l - 2 * (h - pp)
+
+    df = pd.DataFrame({
+        "pp": pp,
+        "r1": r1,
+        "s1": s1,
+        "r2": r2,
+        "s2": s2,
+        "r3": r3,
+        "s3": s3,
+    }, index=c.index)
+
+    return df
+
+
+def support_resistance_levels(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: str = "classic") -> dict:
+    """
+    Convenience helper returning the latest pivot and S/R levels as a dict.
+
+    Example return:
+    {
+        'pp': 1.2345,
+        'r1': 1.2456,
+        's1': 1.2234,
+        ...
+    }
+    """
+    df = pivot_points(high, low, close, method=method)
+    last = df.iloc[-1]
+    return {
+        "pp": float(last["pp"]),
+        "r1": float(last["r1"]),
+        "s1": float(last["s1"]),
+        "r2": float(last["r2"]),
+        "s2": float(last["s2"]),
+        "r3": float(last["r3"]),
+        "s3": float(last["s3"]),
+    }
+
+# ----------------------------
 # Parabolic SAR
 # ----------------------------
 def parabolic_sar(high: SeriesLike, low: SeriesLike, step: float = 0.02, max_af: float = 0.2) -> pd.Series:
