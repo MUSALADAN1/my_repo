@@ -8,12 +8,68 @@ Provides:
    keyed by timeframe. The alignment uses the base timeframe's index as the driving axis.
  - MultiTimeframeWindow: helper to request synchronized windows (sliding) across TFs.
 
-Assumptions:
- - Input `df` is a pandas.DataFrame with a DatetimeIndex and at least columns: ['open','high','low','close','volume']
- - Timeframe strings are compatible with pandas offset aliases (e.g., '5T', '15T', '1H', '1D').
+Defensive behaviour:
+ - If df doesn't have a DatetimeIndex, attempts to find a time column (time,timestamp,datetime,date)
+   and convert it to a DatetimeIndex.
+ - If the index contains duplicates they are collapsed (last occurrence kept) and index is sorted.
+ - If OHLCV columns are aligned by position but have different index, alignment by position is used.
 """
 from typing import Dict, List, Optional
 import pandas as pd
+
+
+# -------------------------
+# Helpers
+# -------------------------
+def _find_time_column(df: pd.DataFrame) -> Optional[str]:
+    """Try common time-like column names."""
+    candidates = ["time", "timestamp", "datetime", "date", "ts"]
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure DataFrame has a proper DatetimeIndex.
+
+    - If df.index is already DatetimeIndex, we sort & drop duplicates (keep last).
+    - Otherwise try to find common time column and set it as index (converted to datetime).
+    - Raises ValueError if no datetime can be found.
+    """
+    if isinstance(df.index, pd.DatetimeIndex):
+        # make a copy to avoid mutating original passed object accidentally
+        df2 = df.copy()
+        # drop duplicate timestamps keeping last (avoid resample confusion)
+        if df2.index.duplicated().any():
+            df2 = df2[~df2.index.duplicated(keep="last")]
+        df2 = df2.sort_index()
+        return df2
+
+    # try to find a time-like column
+    time_col = _find_time_column(df)
+    if time_col:
+        df2 = df.copy()
+        df2[time_col] = pd.to_datetime(df2[time_col])
+        df2 = df2.set_index(time_col)
+        # drop duplicate timestamps
+        if df2.index.duplicated().any():
+            df2 = df2[~df2.index.duplicated(keep="last")]
+        df2 = df2.sort_index()
+        return df2
+
+    # last attempt: try to coerce index to datetime if it has datetime-like dtype
+    try:
+        idx = pd.to_datetime(df.index)
+        df2 = df.copy()
+        df2.index = idx
+        if df2.index.duplicated().any():
+            df2 = df2[~df2.index.duplicated(keep="last")]
+        df2 = df2.sort_index()
+        return df2
+    except Exception:
+        raise ValueError("DataFrame must have a DatetimeIndex or a time-like column (time,timestamp,datetime,date).")
 
 
 def _ensure_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -48,12 +104,15 @@ def _align_series_to_index(s: pd.Series, index: pd.Index) -> pd.Series:
     return s.reindex(index).astype(float)
 
 
+# -------------------------
+# Resampling
+# -------------------------
 def resample_ohlcv(df: pd.DataFrame, timeframe: str, how_volume: str = "sum") -> pd.DataFrame:
     """
     Resample a high-frequency OHLCV DataFrame to a coarser timeframe.
 
     Parameters:
-      - df: DataFrame with DatetimeIndex and columns open, high, low, close, (volume optional)
+      - df: DataFrame with DatetimeIndex or time column, cols open, high, low, close, (volume optional)
       - timeframe: pandas offset alias like '5T', '15T', '1H'
       - how_volume: aggregation for volume ('sum' or 'mean')
 
@@ -63,10 +122,10 @@ def resample_ohlcv(df: pd.DataFrame, timeframe: str, how_volume: str = "sum") ->
     if df is None or df.empty:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
-    # must have ohlc columns
+    # ensure df has datetime index and required columns
+    df = _ensure_datetime_index(df)
     df = _ensure_ohlcv_columns(df)
 
-    # align each column to the df.index to avoid misaligned series causing NaNs
     idx = df.index
     o_s = _align_series_to_index(df["open"], idx)
     h_s = _align_series_to_index(df["high"], idx)
@@ -95,6 +154,9 @@ def resample_ohlcv(df: pd.DataFrame, timeframe: str, how_volume: str = "sum") ->
     return out
 
 
+# -------------------------
+# Alignment across TFs
+# -------------------------
 def align_multi_timeframes(df: pd.DataFrame, base_tf: str, target_tfs: List[str]) -> Dict[str, pd.DataFrame]:
     """
     Given a high-frequency df and a base timeframe string (e.g., '5T'), resample the df to:
@@ -108,11 +170,11 @@ def align_multi_timeframes(df: pd.DataFrame, base_tf: str, target_tfs: List[str]
     if df is None or df.empty:
         return {tf: pd.DataFrame(columns=["open", "high", "low", "close", "volume"]) for tf in [base_tf] + target_tfs}
 
-    # Resample to base timeframe first
+    # ensure datetime index
+    df = _ensure_datetime_index(df)
     base_df = resample_ohlcv(df, base_tf)
     aligned: Dict[str, pd.DataFrame] = {base_tf: base_df}
 
-    # For each target timeframe, resample and reindex to base index via merge_asof (backward fill)
     for tf in target_tfs:
         if tf == base_tf:
             aligned[tf] = base_df
@@ -120,26 +182,28 @@ def align_multi_timeframes(df: pd.DataFrame, base_tf: str, target_tfs: List[str]
         res = resample_ohlcv(df, tf).sort_index()
         base_index = base_df.index.sort_values()
 
-        # create left and right frames for merge_asof
+        # left: base times; right: coarser resampled times
         left = pd.DataFrame(index=base_index).reset_index().rename(columns={"index": "time"})
         right = res.reset_index().rename(columns={"index": "time"})
 
-        # merge_asof requires both frames sorted by 'time'
+        # merge_asof will pick the latest coarser bar <= base bar time
         merged = pd.merge_asof(left, right, on="time", direction="backward")
         merged = merged.set_index("time")
 
-        # ensure expected columns exist
+        # ensure columns
         for col in ["open", "high", "low", "close", "volume"]:
             if col not in merged.columns:
                 merged[col] = pd.NA
 
-        # keep only ohlcv columns
         merged = merged[["open", "high", "low", "close", "volume"]]
         aligned[tf] = merged
 
     return aligned
 
 
+# -------------------------
+# MultiTimeframeWindow
+# -------------------------
 class MultiTimeframeWindow:
     """
     Helper for sliding synchronized windows across multiple timeframes.
@@ -156,7 +220,6 @@ class MultiTimeframeWindow:
         self.window = int(window)
 
     def windows(self):
-        # create base resampled df and aligned frames
         all_tfs = [self.base_tf] + self.target_tfs
         aligned = align_multi_timeframes(self.df, self.base_tf, self.target_tfs)
         base_df = aligned[self.base_tf]
