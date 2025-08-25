@@ -113,8 +113,14 @@ class TrendFollowingStrategy(StrategyPlugin):
         if diff >= self.momentum_threshold and not self.in_long:
             # check for nearby resistance zone that would make a long entry unwise
             if self.zone_filter and self._is_near_strong_resistance(cur_price, highs, lows):
-                # skip opening a long due to a nearby resistance
-                return None
+                # return explicit marker so StrategyManager can record zone-skip metrics
+                return {
+                    "skipped_by_zone": True,
+                    "reason": "near_resistance",
+                    "short_ema": cur_short,
+                    "long_ema": cur_long,
+                    "momentum": diff
+                }
 
             self.in_long = True
             return {"signal": "long", "short_ema": cur_short, "long_ema": cur_long, "momentum": diff}
