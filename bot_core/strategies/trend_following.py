@@ -1,4 +1,5 @@
 # bot_core/strategies/trend_following.py
+from fileinput import close
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
@@ -37,13 +38,16 @@ class TrendFollowingStrategy(StrategyPlugin):
             return None
 
         close = df['close'].astype(float)
-        short_series = central_ema(close, self.short)
-        long_series = central_ema(close, self.long)
 
+        # compute EMAs using central ema implementation
+        short_ema = central_ema(close, self.short)
+        long_ema = central_ema(close, self.long)
 
+        # latest values
         cur_short = float(short_ema.iloc[-1])
         cur_long = float(long_ema.iloc[-1])
         diff = cur_short - cur_long
+
 
         # basic momentum check using difference of EMAs (or could use ROC)
         if diff >= self.momentum_threshold and not self.in_long:
