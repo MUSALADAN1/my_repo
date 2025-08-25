@@ -458,6 +458,115 @@ def sr_levels_from_swings(high: SeriesLike, low: SeriesLike, left: int = 3, righ
     levels.sort(key=lambda x: x["index"])
     return levels
 
+# ----------------------------
+# Aggregate nearby swing points into supply/demand zones (strength scoring)
+# ----------------------------
+def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_points: int = 1) -> list:
+    """
+    Aggregate swing points into zones.
+
+    Args:
+        swings: list of swings like [{'index': int, 'price': float, 'type': 'support'|'resistance'}, ...]
+                expected to be chronological (sorted by index) but not strictly required.
+        price_tolerance: relative tolerance (fraction) within which swings are considered the same zone,
+                         e.g., 0.002 == 0.2%.
+        min_points: minimum number of swings required for a zone to be kept.
+
+    Returns:
+        List of zone dicts sorted by descending strength. Zone dict keys:
+          - 'type': 'support' or 'resistance'
+          - 'center': average price of zone members
+          - 'min_price', 'max_price': bounds of zone
+          - 'count': number of swing members
+          - 'indices': list of member indices (ints)
+          - 'strength': numeric score (count / (1 + normalized_width)) with higher = stronger
+    """
+    if not swings:
+        return []
+
+    # Separate by type
+    by_type = {"support": [], "resistance": []}
+    for s in swings:
+        t = s.get("type")
+        if t not in ("support", "resistance"):
+            continue
+        by_type[t].append(s)
+
+    zones = []
+    for t, items in by_type.items():
+        # sort items by price ascending (for supports) or descending (for resistances)
+        # but grouping is price-based, chronological order not required
+        # We'll iterate in order of appearance so zones are stable
+        for swing in items:
+            price = float(swing["price"])
+            idx = int(swing.get("index", -1))
+            placed = False
+            for zone in zones:
+                if zone["type"] != t:
+                    continue
+                center = zone["center"]
+                # relative tolerance: abs(price - center) / center <= price_tolerance
+                if center == 0:
+                    rel = abs(price - center)
+                else:
+                    rel = abs(price - center) / float(center)
+                if rel <= price_tolerance:
+                    # add to existing zone
+                    zone["prices"].append(price)
+                    zone["indices"].append(idx)
+                    zone["min_price"] = min(zone["min_price"], price)
+                    zone["max_price"] = max(zone["max_price"], price)
+                    zone["center"] = sum(zone["prices"]) / len(zone["prices"])
+                    zone["count"] = len(zone["prices"])
+                    placed = True
+                    break
+            if not placed:
+                # create new zone
+                zones.append({
+                    "type": t,
+                    "prices": [price],
+                    "indices": [idx],
+                    "center": price,
+                    "min_price": price,
+                    "max_price": price,
+                    "count": 1,
+                })
+
+    # finalize zones and compute strength
+    result = []
+    for z in zones:
+        width = max(1e-12, z["max_price"] - z["min_price"])
+        # normalized width relative to center (avoid divide by zero)
+        norm_width = width / (abs(z["center"]) if z["center"] != 0 else 1.0)
+        # strength: prefers many members and narrow zones
+        strength = z["count"] / (1.0 + norm_width)
+        result.append({
+            "type": z["type"],
+            "center": float(z["center"]),
+            "min_price": float(z["min_price"]),
+            "max_price": float(z["max_price"]),
+            "count": int(z["count"]),
+            "indices": [int(i) for i in z["indices"]],
+            "strength": float(strength),
+        })
+
+    # filter small zones
+    filtered = [z for z in result if z["count"] >= int(min_points)]
+    # sort by strength desc (strongest first)
+    filtered.sort(key=lambda x: x["strength"], reverse=True)
+    return filtered
+
+
+def sr_zones_from_series(high: SeriesLike, low: SeriesLike, left: int = 3, right: int = 3,
+                         price_tolerance: float = 0.002, min_points: int = 1) -> list:
+    """
+    Convenience helper: detect swings from series and aggregate them into zones.
+
+    Returns same format as aggregate_swings_to_zones.
+    """
+    swings = sr_levels_from_swings(high, low, left=left, right=right)
+    return aggregate_swings_to_zones(swings, price_tolerance=price_tolerance, min_points=min_points)
+
 
 # ----------------------------
 # Parabolic SAR
