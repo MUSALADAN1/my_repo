@@ -389,6 +389,77 @@ def support_resistance_levels(high: SeriesLike, low: SeriesLike, close: SeriesLi
     }
 
 # ----------------------------
+# Swing high / Swing low detection (basic support/resistance levels)
+# ----------------------------
+def swing_points(high: SeriesLike, low: SeriesLike, left: int = 3, right: int = 3) -> pd.DataFrame:
+    """
+    Detect swing highs and swing lows.
+
+    A swing high at index i is where high[i] is greater than the highs in the
+    'left' bars before it and the 'right' bars after it. Similarly for swing low.
+
+    Args:
+        high, low: series-like arrays (same length)
+        left: number of bars to the left to consider
+        right: number of bars to the right to consider
+
+    Returns:
+        DataFrame with columns: ['swing_high', 'swing_low', 'high', 'low']
+        Boolean columns indicate swing points at that index.
+    """
+    h = _ensure_series(high).astype(float).reset_index(drop=True)
+    l = _ensure_series(low).astype(float).reset_index(drop=True)
+    n = len(h)
+
+    swing_high = pd.Series(False, index=h.index)
+    swing_low = pd.Series(False, index=h.index)
+
+    if n == 0:
+        return pd.DataFrame({"swing_high": swing_high, "swing_low": swing_low, "high": h, "low": l})
+
+    # iterate through feasible indices
+    for i in range(left, n - right):
+        left_h = h.iloc[i - left : i]
+        right_h = h.iloc[i + 1 : i + 1 + right]
+        if (h.iloc[i] > left_h.max()) and (h.iloc[i] > right_h.max()):
+            swing_high.iloc[i] = True
+
+        left_l = l.iloc[i - left : i]
+        right_l = l.iloc[i + 1 : i + 1 + right]
+        if (l.iloc[i] < left_l.min()) and (l.iloc[i] < right_l.min()):
+            swing_low.iloc[i] = True
+
+    # restore original index if input had one
+    result = pd.DataFrame({
+        "swing_high": swing_high,
+        "swing_low": swing_low,
+        "high": h,
+        "low": l
+    })
+
+    return result
+
+
+def sr_levels_from_swings(high: SeriesLike, low: SeriesLike, left: int = 3, right: int = 3) -> list:
+    """
+    Convenience extractor that returns a list of support/resistance levels
+    from detected swing points.
+
+    Returns list of dicts:
+      [{'index': <int>, 'price': <float>, 'type': 'resistance'|'support'}, ...]
+    """
+    df = swing_points(high, low, left=left, right=right)
+    levels = []
+    for idx, row in df[df["swing_high"]].iterrows():
+        levels.append({"index": int(idx), "price": float(row["high"]), "type": "resistance"})
+    for idx, row in df[df["swing_low"]].iterrows():
+        levels.append({"index": int(idx), "price": float(row["low"]), "type": "support"})
+    # sort by index (chronological)
+    levels.sort(key=lambda x: x["index"])
+    return levels
+
+
+# ----------------------------
 # Parabolic SAR
 # ----------------------------
 def parabolic_sar(high: SeriesLike, low: SeriesLike, step: float = 0.02, max_af: float = 0.2) -> pd.Series:
