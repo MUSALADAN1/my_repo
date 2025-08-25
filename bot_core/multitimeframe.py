@@ -12,19 +12,40 @@ Assumptions:
  - Input `df` is a pandas.DataFrame with a DatetimeIndex and at least columns: ['open','high','low','close','volume']
  - Timeframe strings are compatible with pandas offset aliases (e.g., '5T', '15T', '1H', '1D').
 """
-
 from typing import Dict, List, Optional
 import pandas as pd
 
 
 def _ensure_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Keep only relevant columns and ensure they exist; avoid failing when volume missing.
-    cols = {c: c for c in df.columns}
+    """
+    Verify required OHLC columns exist in the DataFrame. We do NOT strictly require 'volume'.
+    """
     for required in ["open", "high", "low", "close"]:
         if required not in df.columns:
             raise ValueError(f"DataFrame missing required OHLC column: {required}")
-    # volume optional
     return df
+
+
+def _align_series_to_index(s: pd.Series, index: pd.Index) -> pd.Series:
+    """
+    Return a series aligned to `index`. If s.index equals index, return s.
+    If s has the same length but different index, align by position (take s.values).
+    Otherwise attempt reindex (which will align by label).
+    """
+    if not isinstance(s, pd.Series):
+        # construct series from iterable by position
+        return pd.Series(list(s), index=index).astype(float)
+
+    # exact index match -> keep as-is
+    if s.index.equals(index):
+        return s.astype(float)
+
+    # same length but different index -> align by position
+    if len(s) == len(index):
+        return pd.Series(s.values, index=index, name=s.name).astype(float)
+
+    # fallback: reindex by label (may introduce NaNs)
+    return s.reindex(index).astype(float)
 
 
 def resample_ohlcv(df: pd.DataFrame, timeframe: str, how_volume: str = "sum") -> pd.DataFrame:
@@ -42,22 +63,33 @@ def resample_ohlcv(df: pd.DataFrame, timeframe: str, how_volume: str = "sum") ->
     if df is None or df.empty:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
+    # must have ohlc columns
     df = _ensure_ohlcv_columns(df)
 
-    o = df["open"].resample(timeframe).first()
-    h = df["high"].resample(timeframe).max()
-    l = df["low"].resample(timeframe).min()
-    c = df["close"].resample(timeframe).last()
-
+    # align each column to the df.index to avoid misaligned series causing NaNs
+    idx = df.index
+    o_s = _align_series_to_index(df["open"], idx)
+    h_s = _align_series_to_index(df["high"], idx)
+    l_s = _align_series_to_index(df["low"], idx)
+    c_s = _align_series_to_index(df["close"], idx)
     if "volume" in df.columns:
-        if how_volume == "sum":
-            v = df["volume"].resample(timeframe).sum()
-        else:
-            v = df["volume"].resample(timeframe).mean()
+        v_s = _align_series_to_index(df["volume"], idx)
     else:
-        v = pd.Series(index=o.index, data=0.0, name="volume")
+        v_s = pd.Series(0.0, index=idx, name="volume", dtype=float)
+
+    # Use pandas resample on these aligned series
+    o = o_s.resample(timeframe).first()
+    h = h_s.resample(timeframe).max()
+    l = l_s.resample(timeframe).min()
+    c = c_s.resample(timeframe).last()
+
+    if how_volume == "sum":
+        v = v_s.resample(timeframe).sum()
+    else:
+        v = v_s.resample(timeframe).mean()
 
     out = pd.DataFrame({"open": o, "high": h, "low": l, "close": c, "volume": v})
+
     # Drop empty groups (periods with NaN close)
     out = out.dropna(subset=["close"])
     return out
@@ -68,37 +100,40 @@ def align_multi_timeframes(df: pd.DataFrame, base_tf: str, target_tfs: List[str]
     Given a high-frequency df and a base timeframe string (e.g., '5T'), resample the df to:
        - base_tf (if different from input freq)
        - each target_tfs value (coarser)
-    Then align each resampled frame to the base_tf index by forward-filling the coarser bars
-    so each base bar has an associated coarser bar value.
+    Then align each resampled frame to the base_tf index by backward-lookup so each base bar
+    has the corresponding coarser bar.
 
     Returns a dict mapping timeframe -> DataFrame aligned to base index.
     """
     if df is None or df.empty:
         return {tf: pd.DataFrame(columns=["open", "high", "low", "close", "volume"]) for tf in [base_tf] + target_tfs}
 
-    # Resample to base timeframe first (use last period convention)
+    # Resample to base timeframe first
     base_df = resample_ohlcv(df, base_tf)
     aligned: Dict[str, pd.DataFrame] = {base_tf: base_df}
 
-    # For each target timeframe, resample and reindex to base index using forward/back fill strategy.
+    # For each target timeframe, resample and reindex to base index via merge_asof (backward fill)
     for tf in target_tfs:
         if tf == base_tf:
             aligned[tf] = base_df
             continue
-        res = resample_ohlcv(df, tf)
-        # we want to map each base timestamp to the most recent coarser bar that includes it.
-        # resampled bars are at period end; we can reindex using asof (merge_asof) or forward-fill after reindex.
-        # Convert index to series to allow merge_asof
-        res = res.sort_index()
+        res = resample_ohlcv(df, tf).sort_index()
         base_index = base_df.index.sort_values()
-        # create DataFrame with base_index to left-join via merge_asof
-        left = pd.DataFrame(index=base_index)
-        left = left.reset_index().rename(columns={"index": "time"})
+
+        # create left and right frames for merge_asof
+        left = pd.DataFrame(index=base_index).reset_index().rename(columns={"index": "time"})
         right = res.reset_index().rename(columns={"index": "time"})
-        # merge_asof requires both sorted
+
+        # merge_asof requires both frames sorted by 'time'
         merged = pd.merge_asof(left, right, on="time", direction="backward")
         merged = merged.set_index("time")
-        # merged columns may have open/high/..; ensure columns exist
+
+        # ensure expected columns exist
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col not in merged.columns:
+                merged[col] = pd.NA
+
+        # keep only ohlcv columns
         merged = merged[["open", "high", "low", "close", "volume"]]
         aligned[tf] = merged
 
@@ -121,14 +156,14 @@ class MultiTimeframeWindow:
         self.window = int(window)
 
     def windows(self):
-        # create base resampled df
+        # create base resampled df and aligned frames
         all_tfs = [self.base_tf] + self.target_tfs
         aligned = align_multi_timeframes(self.df, self.base_tf, self.target_tfs)
         base_df = aligned[self.base_tf]
+
         # iterate over rolling windows on base index
         for i in range(self.window, len(base_df) + 1):
             window_base = base_df.iloc[i - self.window:i].copy()
-            # for each tf, take aligned rows with same timestamps
             out = {}
             for tf in all_tfs:
                 df_tf = aligned[tf].loc[window_base.index].copy()
