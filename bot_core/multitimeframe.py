@@ -1,249 +1,256 @@
 # bot_core/multitimeframe.py
 """
-Multi-timeframe utilities.
+Multi-timeframe utilities: resample OHLCV, align multiple timeframes, and
+a small MultiTimeframeWindow to produce aligned snapshots for strategy inputs.
 
-Provides:
- - resample_ohlcv(df, timeframe): resample an OHLCV DataFrame to a coarser timeframe.
- - align_multi_timeframes(df, base_tf, target_tfs): return dict of aligned dataframes
-   keyed by timeframe. The alignment uses the base timeframe's index as the driving axis.
- - MultiTimeframeWindow: helper to request synchronized windows (sliding) across TFs.
-
-Defensive behaviour:
- - If df doesn't have a DatetimeIndex, attempts to find a time column (time,timestamp,datetime,date)
-   and convert it to a DatetimeIndex.
- - If the index contains duplicates they are collapsed (last occurrence kept) and index is sorted.
- - If OHLCV columns are aligned by position but have different index, alignment by position is used.
+Functions / classes:
+  - resample_ohlcv(df, timeframe) -> DataFrame with open/high/low/close/volume
+  - align_multi_timeframes(df, base_tf, target_tfs) -> dict{tf: df_resampled}
+  - MultiTimeframeWindow(df, base_tf, target_tfs, window) -> snapshot/lookups
 """
-from typing import Dict, List, Optional
+from typing import List, Dict, Optional
 import pandas as pd
-
-
-# -------------------------
-# Helpers
-# -------------------------
-def _find_time_column(df: pd.DataFrame) -> Optional[str]:
-    """Try common time-like column names."""
-    candidates = ["time", "timestamp", "datetime", "date", "ts"]
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
+import numpy as np
 
 
 def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Ensure DataFrame has a proper DatetimeIndex.
-
-    - If df.index is already DatetimeIndex, we sort & drop duplicates (keep last).
-    - Otherwise try to find common time column and set it as index (converted to datetime).
-    - Raises ValueError if no datetime can be found.
+    Make sure df has a sorted DatetimeIndex. Accepts:
+      - df already having a DatetimeIndex
+      - df having a 'time' / 'timestamp' / 'datetime' column
+      - otherwise try to coerce the existing index to datetime
+    Returns a copy with a DatetimeIndex.
     """
-    if isinstance(df.index, pd.DatetimeIndex):
-        # make a copy to avoid mutating original passed object accidentally
-        df2 = df.copy()
-        # drop duplicate timestamps keeping last (avoid resample confusion)
-        if df2.index.duplicated().any():
-            df2 = df2[~df2.index.duplicated(keep="last")]
-        df2 = df2.sort_index()
-        return df2
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError("expected a pandas DataFrame")
 
-    # try to find a time-like column
-    time_col = _find_time_column(df)
-    if time_col:
-        df2 = df.copy()
-        df2[time_col] = pd.to_datetime(df2[time_col])
-        df2 = df2.set_index(time_col)
-        # drop duplicate timestamps
-        if df2.index.duplicated().any():
-            df2 = df2[~df2.index.duplicated(keep="last")]
-        df2 = df2.sort_index()
-        return df2
+    df = df.copy()
 
-    # last attempt: try to coerce index to datetime if it has datetime-like dtype
-    try:
-        idx = pd.to_datetime(df.index)
-        df2 = df.copy()
-        df2.index = idx
-        if df2.index.duplicated().any():
-            df2 = df2[~df2.index.duplicated(keep="last")]
-        df2 = df2.sort_index()
-        return df2
-    except Exception:
-        raise ValueError("DataFrame must have a DatetimeIndex or a time-like column (time,timestamp,datetime,date).")
+    # prefer explicit time-like column
+    time_candidates = [c for c in ("time", "timestamp", "datetime", "date", "ts") if c in df.columns]
+    if time_candidates:
+        col = time_candidates[0]
+        df.index = pd.to_datetime(df[col])
+        df = df.drop(columns=[col], errors="ignore")
+    else:
+        # if index already datetime-like, keep it; otherwise try to convert
+        if not isinstance(df.index, pd.DatetimeIndex):
+            try:
+                df.index = pd.to_datetime(df.index)
+            except Exception:
+                # last resort: try a 'time' field inside object columns
+                raise ValueError("DataFrame must have a datetime-like index or a time/timestamp column")
+
+    # drop rows with NaT index and sort by index
+    df = df[~df.index.isna()]
+    df = df.sort_index()
+    return df
 
 
 def _ensure_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Verify required OHLC columns exist in the DataFrame. We do NOT strictly require 'volume'.
+    Ensure the DataFrame contains the canonical OHLCV columns.
+    If columns exist in different case, attempt case-insensitive match.
     """
-    for required in ["open", "high", "low", "close"]:
-        if required not in df.columns:
-            raise ValueError(f"DataFrame missing required OHLC column: {required}")
-    return df
+    df = df.copy()
+
+    # canonical names we want
+    wanted = ["open", "high", "low", "close", "volume"]
+    colmap = {}
+    lower_map = {c.lower(): c for c in df.columns}
+
+    for w in wanted:
+        if w in df.columns:
+            colmap[w] = w
+        elif w in lower_map:
+            colmap[w] = lower_map[w]
+        else:
+            # allow missing volume (set zeros)
+            if w == "volume":
+                df["volume"] = 0.0
+                colmap["volume"] = "volume"
+            else:
+                raise ValueError(f"missing required OHLC column: {w}")
+
+    # rename into canonical names
+    df = df.rename(columns={colmap[k]: k for k in colmap if colmap[k] != k})
+    # coerce numeric
+    for k in wanted:
+        df[k] = pd.to_numeric(df[k], errors="coerce")
+    return df[wanted]
 
 
-def _align_series_to_index(s: pd.Series, index: pd.Index) -> pd.Series:
+def resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     """
-    Return a series aligned to `index`. If s.index equals index, return s.
-    If s has the same length but different index, align by position (take s.values).
-    Otherwise attempt reindex (which will align by label).
-    """
-    if not isinstance(s, pd.Series):
-        # construct series from iterable by position
-        return pd.Series(list(s), index=index).astype(float)
+    Resample minute/bar-level OHLCV DataFrame to another timeframe.
 
-    # exact index match -> keep as-is
-    if s.index.equals(index):
-        return s.astype(float)
-
-    # same length but different index -> align by position
-    if len(s) == len(index):
-        return pd.Series(s.values, index=index, name=s.name).astype(float)
-
-    # fallback: reindex by label (may introduce NaNs)
-    return s.reindex(index).astype(float)
-
-
-# -------------------------
-# Resampling
-# -------------------------
-def resample_ohlcv(df: pd.DataFrame, timeframe: str, how_volume: str = "sum") -> pd.DataFrame:
-    """
-    Resample a high-frequency OHLCV DataFrame to a coarser timeframe.
-
-    Parameters:
-      - df: DataFrame with DatetimeIndex or time column, cols open, high, low, close, (volume optional)
-      - timeframe: pandas offset alias like '5T', '15T', '1H'
-      - how_volume: aggregation for volume ('sum' or 'mean')
+    Args:
+      df: DataFrame indexed by datetime (or with 'time' column) with open/high/low/close/volume.
+      timeframe: pandas offset alias, e.g. "5T", "1H", "15min", etc.
 
     Returns:
-      DataFrame indexed by resampled period end (pandas default).
+      DataFrame indexed by DatetimeIndex (resample labels) with columns open,high,low,close,volume.
+
+    Notes:
+      - The function sorts by time and drops fully-empty bars.
+      - Uses label='right', closed='right' so bars represent their end timestamps by default.
     """
-    if df is None or df.empty:
+    if df is None or len(df) == 0:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
-    # ensure df has datetime index and required columns
     df = _ensure_datetime_index(df)
     df = _ensure_ohlcv_columns(df)
 
-    idx = df.index
-    o_s = _align_series_to_index(df["open"], idx)
-    h_s = _align_series_to_index(df["high"], idx)
-    l_s = _align_series_to_index(df["low"], idx)
-    c_s = _align_series_to_index(df["close"], idx)
-    if "volume" in df.columns:
-        v_s = _align_series_to_index(df["volume"], idx)
-    else:
-        v_s = pd.Series(0.0, index=idx, name="volume", dtype=float)
+    # resample - use right-closed bins so a 00:00-00:04 group labeled 00:05 when timeframe is "5T".
+    # this is commonly desired for higher-timeframe indicators (label at period end).
+    try:
+        o = df["open"].resample(timeframe, label="right", closed="right").first()
+        h = df["high"].resample(timeframe, label="right", closed="right").max()
+        l = df["low"].resample(timeframe, label="right", closed="right").min()
+        c = df["close"].resample(timeframe, label="right", closed="right").last()
+        v = df["volume"].resample(timeframe, label="right", closed="right").sum()
+    except Exception:
+        # fallback without explicit label/closed (older pandas)
+        o = df["open"].resample(timeframe).first()
+        h = df["high"].resample(timeframe).max()
+        l = df["low"].resample(timeframe).min()
+        c = df["close"].resample(timeframe).last()
+        v = df["volume"].resample(timeframe).sum()
 
-    # Use pandas resample on these aligned series
-    o = o_s.resample(timeframe).first()
-    h = h_s.resample(timeframe).max()
-    l = l_s.resample(timeframe).min()
-    c = c_s.resample(timeframe).last()
+    res = pd.concat([o, h, l, c, v], axis=1)
+    res.columns = ["open", "high", "low", "close", "volume"]
 
-    if how_volume == "sum":
-        v = v_s.resample(timeframe).sum()
-    else:
-        v = v_s.resample(timeframe).mean()
-
-    out = pd.DataFrame({"open": o, "high": h, "low": l, "close": c, "volume": v})
-
-    # Drop empty groups (periods with NaN close)
-    out = out.dropna(subset=["close"])
-    return out
+    # drop bars that have no price information at all (both open and close NaN)
+    # but keep bars that have tiny volume but valid prices
+    res = res.dropna(how="all", subset=["open", "close"])
+    return res
 
 
-# -------------------------
-# Alignment across TFs
-# -------------------------
 def align_multi_timeframes(df: pd.DataFrame, base_tf: str, target_tfs: List[str]) -> Dict[str, pd.DataFrame]:
     """
-    Given a high-frequency df and a base timeframe string (e.g., '5T'), resample the df to:
-       - base_tf (if different from input freq)
-       - each target_tfs value (coarser)
-    Then align each resampled frame to the base_tf index by backward-lookup so each base bar
-    has the corresponding coarser bar.
+    Produce resampled, aligned DataFrames for base and each target timeframe.
 
-    Returns a dict mapping timeframe -> DataFrame aligned to base index.
+    Returns a dict keyed by timeframe string. Each value is a resampled OHLCV DataFrame.
+    The base timeframe's index will be used as the alignment index (i.e., other
+    frames are reindexed to base index using forward/backward fill for price
+    columns where appropriate).
+
+    This is intentionally conservative: when reindexing, it forward-fills last
+    known OHLC price into the label (so a higher timeframe's last bar value will
+    be available aligned to the base timeframe's tick).
     """
-    if df is None or df.empty:
-        return {tf: pd.DataFrame(columns=["open", "high", "low", "close", "volume"]) for tf in [base_tf] + target_tfs}
+    if df is None or len(df) == 0:
+        return {base_tf: pd.DataFrame(columns=["open", "high", "low", "close", "volume"])}
 
-    # ensure datetime index
     df = _ensure_datetime_index(df)
-    base_df = resample_ohlcv(df, base_tf)
-    aligned: Dict[str, pd.DataFrame] = {base_tf: base_df}
+    # resample base
+    frames: Dict[str, pd.DataFrame] = {}
+    frames[base_tf] = resample_ohlcv(df, base_tf)
+
+    # for each target, resample and reindex to the base index
+    base_index = frames[base_tf].index
 
     for tf in target_tfs:
-        if tf == base_tf:
-            aligned[tf] = base_df
+        r = resample_ohlcv(df, tf)
+        if r.empty:
+            # create empty with same index as base
+            frames[tf] = pd.DataFrame(index=base_index, columns=["open", "high", "low", "close", "volume"])
             continue
-        res = resample_ohlcv(df, tf).sort_index()
-        base_index = base_df.index.sort_values()
+        # Reindex target to base index using 'ffill' for price columns and 0 for volume
+        # First expand r to include base timestamps
+        r_expanded = r.reindex(sorted(r.index.union(base_index)))
+        # Forward fill prices (carry last bar forward)
+        r_ffill = r_expanded.ffill()
+        # Now select rows corresponding to base_index
+        r_aligned = r_ffill.reindex(base_index)
+        # volume: since volume is per target bar, we don't have a meaningful per-base volume.
+        # We'll fill NaN with 0 for volume.
+        if "volume" in r_aligned.columns:
+            r_aligned["volume"] = r_aligned["volume"].fillna(0.0)
+        frames[tf] = r_aligned[["open", "high", "low", "close", "volume"]]
 
-        # left: base times; right: coarser resampled times
-        left = pd.DataFrame(index=base_index).reset_index().rename(columns={"index": "time"})
-        right = res.reset_index().rename(columns={"index": "time"})
-
-        # merge_asof will pick the latest coarser bar <= base bar time
-        merged = pd.merge_asof(left, right, on="time", direction="backward")
-        merged = merged.set_index("time")
-
-        # ensure columns
-        for col in ["open", "high", "low", "close", "volume"]:
-            if col not in merged.columns:
-                merged[col] = pd.NA
-
-        merged = merged[["open", "high", "low", "close", "volume"]]
-        aligned[tf] = merged
-
-    return aligned
+    return frames
 
 
-# -------------------------
-# MultiTimeframeWindow
-# -------------------------
 class MultiTimeframeWindow:
     """
-    Helper for sliding synchronized windows across multiple timeframes.
+    Wrapper around a single OHLCV DataFrame to produce aligned snapshots across timeframes.
 
     Usage:
-        mtw = MultiTimeframeWindow(df, base_tf="5T", target_tfs=["15T","1H"], window=20)
-        for w in mtw.windows():  # yields dict: {"5T": df5, "15T": df15, "1H": df1h}
-            ... process
+      mtw = MultiTimeframeWindow(df, base_tf="1T", target_tfs=["5T","15T"], window=50)
+      snap = mtw.snapshot(lookback=20)
+      # snap is dict: {"1T": df_base_last20, "5T": df_5T_aligned_last20, ...}
     """
-    def __init__(self, df: pd.DataFrame, base_tf: str, target_tfs: Optional[List[str]] = None, window: int = 50):
-        self.df = df
+
+    def __init__(self, df: pd.DataFrame, base_tf: str = "1T", target_tfs: Optional[List[str]] = None, window: int = 100):
+        self.df = _ensure_datetime_index(df) if (df is not None and len(df) > 0) else pd.DataFrame()
         self.base_tf = base_tf
         self.target_tfs = target_tfs or []
         self.window = int(window)
 
-    def windows(self):
-        all_tfs = [self.base_tf] + self.target_tfs
-        aligned = align_multi_timeframes(self.df, self.base_tf, self.target_tfs)
-        base_df = aligned[self.base_tf]
-
-        # iterate over rolling windows on base index
-        for i in range(self.window, len(base_df) + 1):
-            window_base = base_df.iloc[i - self.window:i].copy()
-            out = {}
-            for tf in all_tfs:
-                df_tf = aligned[tf].loc[window_base.index].copy()
-                out[tf] = df_tf
-            yield out
-
-    def snapshot(self, lookback: Optional[int] = None):
+    def snapshot(self, lookback: Optional[int] = None) -> Dict[str, pd.DataFrame]:
         """
-        Return a single snapshot (latest window) aligned across timeframes.
+        Return the latest aligned snapshot across requested timeframes.
+        lookback: number of base bars to include (defaults to the window size)
         """
-        lookback = lookback or self.window
+        lookback = int(lookback or self.window)
+        if self.df is None or len(self.df) == 0:
+            return {self.base_tf: pd.DataFrame(columns=["open", "high", "low", "close", "volume"])}
+
         aligned = align_multi_timeframes(self.df, self.base_tf, self.target_tfs)
-        base = aligned[self.base_tf]
+        base = aligned.get(self.base_tf, pd.DataFrame())
         if len(base) < lookback:
             raise ValueError("not enough bars for requested lookback")
-        window_base = base.iloc[-lookback:]
-        out = {}
-        for tf in [self.base_tf] + self.target_tfs:
-            out[tf] = aligned[tf].loc[window_base.index].copy()
+
+        out: Dict[str, pd.DataFrame] = {}
+        # slice last lookback bars (chronological)
+        base_tail = base.iloc[-lookback:].copy()
+        out[self.base_tf] = base_tail
+
+        # for each target tf, take the corresponding rows aligned to the base tail index
+        for tf in self.target_tfs:
+            tf_df = aligned.get(tf, pd.DataFrame())
+            # If the aligned tf has the same index as base, just take last lookback rows
+            if isinstance(tf_df.index, pd.DatetimeIndex):
+                tf_tail = tf_df.reindex(base_tail.index).copy()
+            else:
+                tf_tail = tf_df.iloc[-lookback:].copy()
+                tf_tail.index = base_tail.index  # best-effort mapping
+            out[tf] = tf_tail
+
+        return out
+
+    def window_slice(self, end_time=None, lookback: Optional[int] = None) -> Dict[str, pd.DataFrame]:
+        """
+        Alternative: allow requesting a slice that ends at end_time (datetime-like) and spans lookback bars.
+        If end_time is None it uses the latest available index.
+        """
+        lookback = int(lookback or self.window)
+        if self.df is None or len(self.df) == 0:
+            return {self.base_tf: pd.DataFrame(columns=["open", "high", "low", "close", "volume"])}
+
+        aligned = align_multi_timeframes(self.df, self.base_tf, self.target_tfs)
+        base = aligned.get(self.base_tf, pd.DataFrame())
+        if base.empty:
+            return {self.base_tf: base}
+
+        if end_time is None:
+            end_idx = base.index[-1]
+        else:
+            end_idx = pd.to_datetime(end_time)
+            # find nearest timestamp <= end_idx
+            idxs = base.index[base.index <= end_idx]
+            if len(idxs) == 0:
+                raise ValueError("end_time is before available data")
+            end_idx = idxs[-1]
+
+        # find starting index
+        pos = base.index.get_indexer([end_idx], method="ffill")[0]
+        start_pos = max(0, pos - lookback + 1)
+        base_slice = base.iloc[start_pos: pos + 1].copy()
+        out = {self.base_tf: base_slice}
+        for tf in self.target_tfs:
+            tf_df = aligned.get(tf, pd.DataFrame())
+            tf_slice = tf_df.reindex(base_slice.index).copy()
+            out[tf] = tf_slice
         return out
