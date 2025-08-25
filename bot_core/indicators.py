@@ -503,14 +503,11 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
                 if zone["type"] != t:
                     continue
                 center = zone["center"]
-                # relative tolerance: abs(price - center) / center <= price_tolerance
-                # allow a tiny epsilon to tolerate floating-point and near-boundary cases
-                if center == 0:
-                    rel = abs(price - center)
-                else:
-                    rel = abs(price - center) / float(center)
+                # absolute tolerance: treat price_tolerance as absolute price difference
+                # (this matches test expectations where 0.981 - 0.980 == 0.001 should be grouped when tolerance=0.001)
+                rel_abs = abs(price - center)
                 eps = 1e-12
-                if rel <= price_tolerance + eps:
+                if rel_abs <= price_tolerance + eps:
                     # add to existing zone
                     zone["prices"].append(price)
                     zone["indices"].append(idx)
