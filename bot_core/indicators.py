@@ -306,33 +306,49 @@ def pivot_points(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: s
 
     Methods supported:
       - "classic" : PP = (H+L+C)/3
-                    R1 = (2*PP) - L
-                    S1 = (2*PP) - H
-                    R2 = PP + (H - L)
-                    S2 = PP - (H - L)
-                    R3 = H + 2*(PP - L)
-                    S3 = L - 2*(H - PP)
+          R1 = (2*PP) - L
+          S1 = (2*PP) - H
+          R2 = PP + (H - L)
+          S2 = PP - (H - L)
+          R3 = H + 2*(PP - L)
+          S3 = L - 2*(H - PP)
 
-      - "fibonacci" : uses Fibonacci multiples for R2/S2 and R3/S3 (optional later)
+      - "fibonacci": uses Fibonacci retracement multiples on (H-L)
+          R1 = PP + 0.382*(H - L)
+          S1 = PP - 0.382*(H - L)
+          R2 = PP + 0.618*(H - L)
+          S2 = PP - 0.618*(H - L)
+          R3 = PP + 1.000*(H - L)
+          S3 = PP - 1.000*(H - L)
 
     Returns a DataFrame with columns:
       'pp', 'r1', 's1', 'r2', 's2', 'r3', 's3'
-
-    Args:
-        high, low, close: Series-like inputs (same length)
-        method: pivot calculation method (default 'classic')
     """
     h = _ensure_series(high).astype(float)
     l = _ensure_series(low).astype(float)
     c = _ensure_series(close).astype(float)
 
     pp = (h + l + c) / 3.0
-    r1 = (2 * pp) - l
-    s1 = (2 * pp) - h
-    r2 = pp + (h - l)
-    s2 = pp - (h - l)
-    r3 = h + 2 * (pp - l)
-    s3 = l - 2 * (h - pp)
+    range_hl = (h - l)
+
+    method = (method or "classic").strip().lower()
+    if method == "classic":
+        r1 = (2 * pp) - l
+        s1 = (2 * pp) - h
+        r2 = pp + range_hl
+        s2 = pp - range_hl
+        r3 = h + 2 * (pp - l)
+        s3 = l - 2 * (h - pp)
+    elif method in ("fibonacci", "fibo", "fib"):
+        # Fibonacci multipliers commonly used: 38.2%, 61.8%, 100%
+        r1 = pp + 0.382 * range_hl
+        s1 = pp - 0.382 * range_hl
+        r2 = pp + 0.618 * range_hl
+        s2 = pp - 0.618 * range_hl
+        r3 = pp + 1.000 * range_hl
+        s3 = pp - 1.000 * range_hl
+    else:
+        raise ValueError(f"Unknown pivot method: {method}")
 
     df = pd.DataFrame({
         "pp": pp,
@@ -345,6 +361,7 @@ def pivot_points(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: s
     }, index=c.index)
 
     return df
+
 
 
 def support_resistance_levels(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: str = "classic") -> dict:
