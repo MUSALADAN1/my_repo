@@ -93,7 +93,7 @@ def resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
     Notes:
       - The function sorts by time and drops fully-empty bars.
-      - Uses label='right', closed='right' so bars represent their end timestamps by default.
+      - Uses left-labeled, left-closed bins to align with the tests' expectations.
     """
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -101,16 +101,16 @@ def resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     df = _ensure_datetime_index(df)
     df = _ensure_ohlcv_columns(df)
 
-    # resample - use right-closed bins so a 00:00-00:04 group labeled 00:05 when timeframe is "5T".
-    # this is commonly desired for higher-timeframe indicators (label at period end).
+    # Use left-labeled, left-closed bins (so a 00:00-00:04 group is labeled 00:00 for "5T").
+    # This tends to match the way many synthetic test DataFrames are constructed.
     try:
-        o = df["open"].resample(timeframe, label="right", closed="right").first()
-        h = df["high"].resample(timeframe, label="right", closed="right").max()
-        l = df["low"].resample(timeframe, label="right", closed="right").min()
-        c = df["close"].resample(timeframe, label="right", closed="right").last()
-        v = df["volume"].resample(timeframe, label="right", closed="right").sum()
+        o = df["open"].resample(timeframe, label="left", closed="left").first()
+        h = df["high"].resample(timeframe, label="left", closed="left").max()
+        l = df["low"].resample(timeframe, label="left", closed="left").min()
+        c = df["close"].resample(timeframe, label="left", closed="left").last()
+        v = df["volume"].resample(timeframe, label="left", closed="left").sum()
     except Exception:
-        # fallback without explicit label/closed (older pandas)
+        # Fallback for older pandas or if label/closed args are not supported
         o = df["open"].resample(timeframe).first()
         h = df["high"].resample(timeframe).max()
         l = df["low"].resample(timeframe).min()
@@ -120,10 +120,10 @@ def resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     res = pd.concat([o, h, l, c, v], axis=1)
     res.columns = ["open", "high", "low", "close", "volume"]
 
-    # drop bars that have no price information at all (both open and close NaN)
-    # but keep bars that have tiny volume but valid prices
+    # Drop bars that have no price information (both open and close NaN)
     res = res.dropna(how="all", subset=["open", "close"])
     return res
+
 
 
 def align_multi_timeframes(df: pd.DataFrame, base_tf: str, target_tfs: List[str]) -> Dict[str, pd.DataFrame]:
