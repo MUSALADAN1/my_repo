@@ -1,10 +1,13 @@
 # tests/test_broker_order_delegation.py
 from bot_core.exchanges.broker import Broker
+# tests/test_broker_order_delegation.py (snippet)
+
 from bot_core.exchanges.adapter_base import ExchangeAdapter
 
 class DummyAdapter(ExchangeAdapter):
-    def __init__(self):
-        super().__init__({})
+    def __init__(self, config: dict = None):
+        # forward config like a real adapter would
+        super().__init__(config or {})
     def connect(self):
         self.connected = True
         return True
@@ -14,6 +17,7 @@ class DummyAdapter(ExchangeAdapter):
     def fetch_order(self, oid, symbol=None): return {"id":oid}
     def fetch_open_orders(self, symbol=None): return [{"id":"o1"}]
     def cancel_order(self, oid, symbol=None): return {"id":oid,"status":"cancelled"}
+
 
 def test_broker_delegates_orders():
     ad = DummyAdapter({})
