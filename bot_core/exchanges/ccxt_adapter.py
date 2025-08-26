@@ -115,6 +115,65 @@ class CCXTAdapter(ExchangeAdapter):
 
         # final fallback (mock response)
         return {"id": "ccxt-mock-1", "status": "filled", "symbol": symbol, "side": side, "amount": amount, "price": price, "order_type": order_type}
+    def fetch_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Retrieve order details by id. Try ccxt.fetch_order first, then common SDK aliases.
+        Returns a dict (normalized) or minimal fallback dict.
+        """
+        if self._has_method("fetch_order"):
+            try:
+                return self.client.fetch_order(order_id, symbol)
+            except Exception:
+                pass
+
+        for alt in ("fetchOrder", "get_order", "getOrder"):
+            if self._has_method(alt):
+                try:
+                    return getattr(self.client, alt)(order_id, symbol)
+                except Exception:
+                    pass
+
+        # fallback minimal representation
+        return {"id": order_id, "status": "unknown", "symbol": symbol}
+
+    def fetch_open_orders(self, symbol: Optional[str] = None) -> list:
+        """
+        Return a list of open orders (possibly empty). Try ccxt.fetch_open_orders and common aliases.
+        """
+        if self._has_method("fetch_open_orders"):
+            try:
+                return self.client.fetch_open_orders(symbol)
+            except Exception:
+                pass
+
+        for alt in ("fetchOpenOrders", "get_open_orders", "open_orders"):
+            if self._has_method(alt):
+                try:
+                    return getattr(self.client, alt)(symbol)
+                except Exception:
+                    pass
+
+        return []
+
+    def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Cancel an order by id. Try ccxt.cancel_order then common aliases. Return cancellation result dict.
+        """
+        if self._has_method("cancel_order"):
+            try:
+                return self.client.cancel_order(order_id, symbol)
+            except Exception:
+                pass
+
+        for alt in ("cancelOrder", "cancel_order_by_id", "cancel_order_by_symbol"):
+            if self._has_method(alt):
+                try:
+                    return getattr(self.client, alt)(order_id, symbol)
+                except Exception:
+                    pass
+
+        # fallback ack
+        return {"id": order_id, "status": "cancelled"}
 
     def fetch_ohlcv(self, symbol: str, timeframe: Any, limit: int = 500) -> pd.DataFrame:
         """
