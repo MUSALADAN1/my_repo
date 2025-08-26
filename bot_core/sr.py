@@ -95,29 +95,73 @@ def aggregate_zones_from_df(df, sources: Optional[List[str]] = None, tol: float 
             continue
         funcs = candidate_names.get(src, [])
         for fname in funcs:
-            if hasattr(mod, fname):
-                func = getattr(mod, fname)
-                res = _safe_call_candidate(func, df)
-                if not res:
-                    continue
-                # normalize if dict/list of dicts etc
-                if isinstance(res, dict) and "center" in res:
-                    maybe = _normalize_zone(res)
-                    if maybe:
-                        zones.append(maybe)
-                elif isinstance(res, (list, tuple)):
-                    for item in res:
-                        if isinstance(item, dict):
-                            nz = _normalize_zone(item)
-                            if nz:
-                                # boost strength by source type heuristics
-                                if src == "demand_supply":
-                                    nz["strength"] = nz.get("strength", 1.0) * 2.0
-                                elif src == "fibonacci":
-                                    nz["strength"] = nz.get("strength", 1.0) * 1.5
-                                zones.append(nz)
-                # only call first matching function per module
-                break
+                if hasattr(mod, fname):
+                    func = getattr(mod, fname)
+                    res = _safe_call_candidate(func, df)
+                    # handle None or empty
+                    if res is None:
+                        continue
+
+                    # If module returned a DataFrame (e.g. pivot table), convert rows -> zones
+                    try:
+                        import pandas as pd  # local import to avoid hard dependency if not needed
+                    except Exception:
+                        pd = None
+
+                    if pd is not None and isinstance(res, pd.DataFrame):
+                        if res.empty:
+                            continue
+                        # Convert pivot-like columns (P, R1, R2, S1, S2, S3, etc.) into zones
+                        for _, row in res.iterrows():
+                            for col in row.index:
+                                try:
+                                    val = row[col]
+                                    if val is None or (hasattr(val, "item") and pd.isna(val)):
+                                        continue
+                                    v = float(val)
+                                except Exception:
+                                    continue
+                                col_up = str(col).upper()
+                                if col_up == "P":
+                                    ztype = "pivot"
+                                elif col_up.startswith("R"):
+                                    ztype = "resistance"
+                                elif col_up.startswith("S"):
+                                    ztype = "support"
+                                else:
+                                    ztype = "zone"
+                                nz = {
+                                    "type": ztype,
+                                    "center": v,
+                                    "min_price": v * 0.999,
+                                    "max_price": v * 1.001,
+                                    "strength": 1.0,
+                                }
+                                maybe = _normalize_zone(nz)
+                                if maybe:
+                                    zones.append(maybe)
+                        # first matching function per module consumed
+                        break
+
+                    # normalize if dict/list of dicts etc
+                    if isinstance(res, dict) and "center" in res:
+                        maybe = _normalize_zone(res)
+                        if maybe:
+                            zones.append(maybe)
+                    elif isinstance(res, (list, tuple)):
+                        for item in res:
+                            if isinstance(item, dict):
+                                nz = _normalize_zone(item)
+                                if nz:
+                                    # boost strength by source type heuristics
+                                    if src == "demand_supply":
+                                        nz["strength"] = nz.get("strength", 1.0) * 2.0
+                                    elif src == "fibonacci":
+                                        nz["strength"] = nz.get("strength", 1.0) * 1.5
+                                    zones.append(nz)
+                    # only call first matching function per module
+                    break
+
 
     # if no zones found, fallback to a simple zone around latest close
     if not zones:
