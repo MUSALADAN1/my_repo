@@ -270,10 +270,14 @@ def create_app(config: Optional[Dict[str, Any]] = None):
       app.register_blueprint(bp, url_prefix="/marketplace")
     """
     from flask import Flask
+
+    # declare globals first so we can safely read/write the module-level names
+    global BASE_DIR, PLUGINS_DIR, REGISTRY_PATH
+
     app = Flask("marketplace_app")
     cfg = config or {}
     base = cfg.get("MARKETPLACE_BASE") or os.environ.get("MARKETPLACE_BASE") or BASE_DIR
-    global BASE_DIR, PLUGINS_DIR, REGISTRY_PATH
+
     BASE_DIR = base
     PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
     REGISTRY_PATH = os.path.join(BASE_DIR, "plugins.json")
