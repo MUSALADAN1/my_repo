@@ -98,6 +98,7 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
 
     # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
         # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
+       # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
     try:
         # if StrategyManager has a snapshot/get_zones method
         if hasattr(mgr, "get_zones_snapshot"):
@@ -110,16 +111,77 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
     except Exception:
         out["zones"] = []
 
-    # Metrics - try common attributes
+    # Metrics - try common attributes and attach an 'elliott' snapshot when possible
     try:
         metrics = {}
         if hasattr(mgr, "get_metrics_snapshot"):
             metrics = mgr.get_metrics_snapshot() or {}
         elif hasattr(mgr, "last_metrics"):
             metrics = getattr(mgr, "last_metrics") or {}
+
+        # compute lightweight Elliott snapshot (defensive)
+        try:
+            # local imports so missing optional deps don't break the whole endpoint
+            import pandas as pd  # type: ignore
+            from bot_core import elliott as elliott_mod  # type: ignore
+
+            # helper to extract a close Series from various possible sources
+            def _extract_last_close_series():
+                # 1) common manager API
+                if hasattr(mgr, "get_last_ohlcv"):
+                    try:
+                        df = mgr.get_last_ohlcv()
+                        if isinstance(df, pd.DataFrame) and "close" in df.columns:
+                            return df["close"]
+                    except Exception:
+                        pass
+                # 2) manager attribute
+                if hasattr(mgr, "last_ohlcv"):
+                    try:
+                        df = getattr(mgr, "last_ohlcv")
+                        if isinstance(df, pd.DataFrame) and "close" in df.columns:
+                            return df["close"]
+                    except Exception:
+                        pass
+                # 3) last_metrics may include an ohlcv snapshot
+                lm = getattr(mgr, "last_metrics", None)
+                if isinstance(lm, dict):
+                    df = lm.get("last_ohlcv") or lm.get("ohlcv")
+                    if isinstance(df, pd.DataFrame) and "close" in df.columns:
+                        return df["close"]
+                # 4) try strategies for a recent ohlcv
+                for s in getattr(mgr, "strategies", []) or []:
+                    try:
+                        if hasattr(s, "last_ohlcv"):
+                            df = getattr(s, "last_ohlcv")
+                            if isinstance(df, pd.DataFrame) and "close" in df.columns:
+                                return df["close"]
+                    except Exception:
+                        continue
+                return None
+
+            close_series = _extract_last_close_series()
+            if close_series is not None and len(close_series) > 0:
+                # choose conservative detection params — tune later
+                ell_snapshot = elliott_mod.detect_impulse(close_series, min_swings=5, left=1, right=1)
+                # attach into metrics under a stable key
+                metrics = metrics or {}
+                metrics.setdefault("elliott", {})
+                metrics["elliott"].update({
+                    "snapshot": ell_snapshot,
+                    "computed_from": "last_ohlcv",
+                })
+        except Exception:
+            # any failure computing elliott should not break the status endpoint
+            pass
+
         out["metrics"] = metrics
     except Exception:
         out["metrics"] = {}
+
+    out["last_update"] = now
+    return out
+
 
     # Pivots - try multiple fallbacks to produce a simple pivot snapshot (P, R1..S3)
     try:
