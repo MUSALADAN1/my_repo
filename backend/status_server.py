@@ -99,6 +99,7 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
     # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
         # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
        # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
+        # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
     try:
         # if StrategyManager has a snapshot/get_zones method
         if hasattr(mgr, "get_zones_snapshot"):
@@ -106,10 +107,54 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
         elif hasattr(mgr, "last_metrics") and isinstance(getattr(mgr, "last_metrics"), dict):
             out["zones"] = getattr(mgr, "last_metrics").get("zones", [])
         else:
-            # attempt to call sr_zones_from_series on the first strategy's recent window, if available
             out["zones"] = []
+
+        # If still empty, attempt to compute combined SR zones from available indicators
+        if not out["zones"]:
+            try:
+                from bot_core import sr as sr_mod  # type: ignore
+                import pandas as pd  # type: ignore
+
+                # try common sources for an ohlcv snapshot
+                df = None
+                if hasattr(mgr, "get_last_ohlcv"):
+                    try:
+                        df = mgr.get_last_ohlcv()
+                    except Exception:
+                        df = None
+                if df is None and hasattr(mgr, "last_ohlcv"):
+                    try:
+                        df = getattr(mgr, "last_ohlcv")
+                    except Exception:
+                        df = None
+                lm = getattr(mgr, "last_metrics", None)
+                if df is None and isinstance(lm, dict):
+                    df = lm.get("last_ohlcv") or lm.get("ohlcv")
+                # try strategies for recent data
+                if df is None:
+                    for s in getattr(mgr, "strategies", []) or []:
+                        try:
+                            if hasattr(s, "last_ohlcv"):
+                                cand = getattr(s, "last_ohlcv")
+                                if hasattr(cand, "columns") and "close" in cand.columns:
+                                    df = cand
+                                    break
+                        except Exception:
+                            continue
+
+                if df is not None:
+                    # normalize to DataFrame just in case
+                    if not isinstance(df, pd.DataFrame):
+                        df = None
+
+                if df is not None:
+                    out["zones"] = sr_mod.aggregate_zones_from_df(df) or []
+            except Exception:
+                # don't fail the endpoint if we can't compute zones
+                out["zones"] = out.get("zones", [])
     except Exception:
         out["zones"] = []
+
 
     # Metrics - try common attributes and attach an 'elliott' snapshot when possible
     try:
