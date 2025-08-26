@@ -209,11 +209,51 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
                 pass
 
         # Attach metrics to output
+                # Attach metrics to output
         out["metrics"] = metrics
 
-        # Ensure top-level pivots key is present for API consumers/tests.
-        # Use the computed metrics["pivots"] if available, otherwise an empty dict.
-        out["pivots"] = (metrics or {}).get("pivots", {})
+        # Normalize pivots into a JSON-friendly structure:
+        # - If pivots is a pandas DataFrame, convert to list-of-dicts and
+        #   stringify any datetime index/columns to ISO format.
+        piv = (metrics or {}).get("pivots", {})
+
+        try:
+            import pandas as pd
+        except Exception:
+            pd = None
+
+        normalized_pivots = piv
+        if pd is not None:
+            # If piv is a DataFrame -> convert to list of records
+            if isinstance(piv, pd.DataFrame):
+                df = piv.copy()
+
+                # If time is in the index, reset it into a column so it becomes part of records
+                if isinstance(df.index, pd.DatetimeIndex):
+                    df = df.reset_index()
+                    # ensure index column has a sensible name
+                    if df.columns[0] == "index":
+                        df.rename(columns={"index": "time"}, inplace=True)
+
+                # Convert any Timestamp values to ISO strings for JSON friendliness
+                for col in df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df[col]):
+                        df[col] = df[col].apply(lambda x: x.isoformat() if not pd.isna(x) else None)
+                    else:
+                        # also convert any single Timestamp-like objects safely
+                        df[col] = df[col].apply(lambda x: x.isoformat() if hasattr(x, "isoformat") else x)
+
+                normalized_pivots = df.to_dict(orient="records")
+
+            # If piv is a pandas Series -> convert to single-record list
+            elif isinstance(piv, pd.Series):
+                s = piv.copy()
+                s = s.apply(lambda x: x.isoformat() if hasattr(x, "isoformat") else x)
+                normalized_pivots = [s.to_dict()]
+
+        # Assign top-level pivots as the normalized value (fall back to empty list)
+        out["pivots"] = normalized_pivots if normalized_pivots else []
+
 
     except Exception:
         out["metrics"] = {}
