@@ -97,6 +97,7 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
         out["strategies"] = []
 
     # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
+        # Try to get zones - StrategyManager might provide a helper or strategies themselves might expose zones
     try:
         # if StrategyManager has a snapshot/get_zones method
         if hasattr(mgr, "get_zones_snapshot"):
@@ -120,8 +121,68 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
     except Exception:
         out["metrics"] = {}
 
+    # Pivots - try multiple fallbacks to produce a simple pivot snapshot (P, R1..S3)
+    try:
+        out["pivots"] = []  # default empty list
+
+        # prefer a manager-provided pivots snapshot if available
+        if hasattr(mgr, "get_pivots_snapshot"):
+            p = mgr.get_pivots_snapshot() or []
+            out["pivots"] = p if isinstance(p, list) else [p]
+        else:
+            # try to compute from metrics.last_ohlcv if present (list of dicts or single dict)
+            last_ohlcv = None
+            if isinstance(metrics, dict) and "last_ohlcv" in metrics:
+                last_ohlcv = metrics.get("last_ohlcv")
+            elif hasattr(mgr, "last_metrics") and isinstance(getattr(mgr, "last_metrics"), dict):
+                last_ohlcv = getattr(mgr, "last_metrics").get("last_ohlcv")
+
+            # normalize last_ohlcv to a DataFrame if possible
+            import pandas as _pd
+            from bot_core import pivots as _pivots
+
+            if last_ohlcv:
+                try:
+                    # If it's a list of dicts or single dict, convert
+                    if isinstance(last_ohlcv, dict):
+                        last_ohlcv = [last_ohlcv]
+                    odf = _pd.DataFrame(last_ohlcv)
+                    # ensure required columns exist
+                    if set(["high", "low", "close"]).issubset({c.lower() for c in odf.columns}):
+                        # normalize column names to lowercase for pivots_from_df
+                        odf.columns = [c.lower() for c in odf.columns]
+                        piv_df = _pivots.pivots_from_df(odf, method="classic")
+                        # attach the last row as a dict
+                        if len(piv_df) > 0:
+                            row = piv_df.iloc[-1].to_dict()
+                            out["pivots"] = [row]
+                except Exception:
+                    # ignore; continue to other fallback
+                    out["pivots"] = out.get("pivots", [])
+
+            # fallback: if zones exist and have min/max/center, synthesize a single OHLC row
+            if not out["pivots"]:
+                try:
+                    if out.get("zones"):
+                        z = out["zones"][0]
+                        if isinstance(z, dict) and "min_price" in z and "max_price" in z and "center" in z:
+                            synth = _pd.DataFrame([{
+                                "high": float(z.get("max_price")),
+                                "low": float(z.get("min_price")),
+                                "close": float(z.get("center"))
+                            }])
+                            piv_df = _pivots.pivots_from_df(synth, method="classic")
+                            if len(piv_df) > 0:
+                                out["pivots"] = [piv_df.iloc[-1].to_dict()]
+                except Exception:
+                    # best-effort - leave pivots as empty list
+                    out["pivots"] = out.get("pivots", [])
+    except Exception:
+        out["pivots"] = []
+
     out["last_update"] = now
     return out
+
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
