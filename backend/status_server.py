@@ -158,6 +158,7 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
 
     # Metrics - try common attributes and attach an 'elliott' snapshot when possible
         # Metrics - try common attributes (and attach pivots if possible)
+        # Metrics - try common attributes (and attach pivots if possible)
     try:
         metrics = {}
         if hasattr(mgr, "get_metrics_snapshot"):
@@ -165,7 +166,7 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
         elif hasattr(mgr, "last_metrics"):
             metrics = getattr(mgr, "last_metrics") or {}
 
-        # If pivots are not present, try to compute from last_ohlcv
+        # If pivots are not present in metrics, try to compute them from last_ohlcv
         # Accepts both list-of-dicts (API style) or a DataFrame-like object.
         if "pivots" not in (metrics or {}):
             try:
@@ -184,7 +185,6 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
                             df["time"] = pd.to_datetime(df["time"])
                             df = df.set_index("time")
                         # normalize expected OHLCV columns
-                        # keep only open/high/low/close/volume if present
                         df = df[[c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]]
                         # compute pivots (pivots_from_df should return a JSON-serializable dict)
                         piv = pivots_from_df(df)
@@ -208,70 +208,17 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
                 # pivot computation failed (module missing or error) — ignore silently
                 pass
 
+        # Attach metrics to output
         out["metrics"] = metrics
+
+        # Ensure top-level pivots key is present for API consumers/tests.
+        # Use the computed metrics["pivots"] if available, otherwise an empty dict.
+        out["pivots"] = (metrics or {}).get("pivots", {})
+
     except Exception:
         out["metrics"] = {}
+        out["pivots"] = {}
 
-
-        # compute lightweight Elliott snapshot (defensive)
-        try:
-            # local imports so missing optional deps don't break the whole endpoint
-            import pandas as pd  # type: ignore
-            from bot_core import elliott as elliott_mod  # type: ignore
-
-            # helper to extract a close Series from various possible sources
-            def _extract_last_close_series():
-                # 1) common manager API
-                if hasattr(mgr, "get_last_ohlcv"):
-                    try:
-                        df = mgr.get_last_ohlcv()
-                        if isinstance(df, pd.DataFrame) and "close" in df.columns:
-                            return df["close"]
-                    except Exception:
-                        pass
-                # 2) manager attribute
-                if hasattr(mgr, "last_ohlcv"):
-                    try:
-                        df = getattr(mgr, "last_ohlcv")
-                        if isinstance(df, pd.DataFrame) and "close" in df.columns:
-                            return df["close"]
-                    except Exception:
-                        pass
-                # 3) last_metrics may include an ohlcv snapshot
-                lm = getattr(mgr, "last_metrics", None)
-                if isinstance(lm, dict):
-                    df = lm.get("last_ohlcv") or lm.get("ohlcv")
-                    if isinstance(df, pd.DataFrame) and "close" in df.columns:
-                        return df["close"]
-                # 4) try strategies for a recent ohlcv
-                for s in getattr(mgr, "strategies", []) or []:
-                    try:
-                        if hasattr(s, "last_ohlcv"):
-                            df = getattr(s, "last_ohlcv")
-                            if isinstance(df, pd.DataFrame) and "close" in df.columns:
-                                return df["close"]
-                    except Exception:
-                        continue
-                return None
-
-            close_series = _extract_last_close_series()
-            if close_series is not None and len(close_series) > 0:
-                # choose conservative detection params — tune later
-                ell_snapshot = elliott_mod.detect_impulse(close_series, min_swings=5, left=1, right=1)
-                # attach into metrics under a stable key
-                metrics = metrics or {}
-                metrics.setdefault("elliott", {})
-                metrics["elliott"].update({
-                    "snapshot": ell_snapshot,
-                    "computed_from": "last_ohlcv",
-                })
-        except Exception:
-            # any failure computing elliott should not break the status endpoint
-            pass
-
-        out["metrics"] = metrics
-    except Exception:
-        out["metrics"] = {}
 
     out["last_update"] = now
     return out
