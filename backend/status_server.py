@@ -157,12 +157,61 @@ def _status_from_manager(mgr) -> Dict[str, Any]:
 
 
     # Metrics - try common attributes and attach an 'elliott' snapshot when possible
+        # Metrics - try common attributes (and attach pivots if possible)
     try:
         metrics = {}
         if hasattr(mgr, "get_metrics_snapshot"):
             metrics = mgr.get_metrics_snapshot() or {}
         elif hasattr(mgr, "last_metrics"):
             metrics = getattr(mgr, "last_metrics") or {}
+
+        # If pivots are not present, try to compute from last_ohlcv
+        # Accepts both list-of-dicts (API style) or a DataFrame-like object.
+        if "pivots" not in (metrics or {}):
+            try:
+                # import here to avoid hard dependency if the module isn't available
+                from bot_core.pivots import pivots_from_df  # defensive import
+                import pandas as pd
+
+                last_ohlcv = (metrics or {}).get("last_ohlcv")
+                if last_ohlcv:
+                    # last_ohlcv may be list of dicts (API-friendly) or a DataFrame already
+                    if isinstance(last_ohlcv, list):
+                        # build a tiny DataFrame; expect each dict to have a time field
+                        df = pd.DataFrame(last_ohlcv)
+                        # if 'time' column present, set as index
+                        if "time" in df.columns:
+                            df["time"] = pd.to_datetime(df["time"])
+                            df = df.set_index("time")
+                        # normalize expected OHLCV columns
+                        # keep only open/high/low/close/volume if present
+                        df = df[[c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]]
+                        # compute pivots (pivots_from_df should return a JSON-serializable dict)
+                        piv = pivots_from_df(df)
+                        if piv is not None:
+                            metrics["pivots"] = piv
+                    else:
+                        # last_ohlcv may already be a DataFrame-like object; attempt to use it
+                        try:
+                            df = pd.DataFrame(last_ohlcv)
+                            if "time" in df.columns:
+                                df["time"] = pd.to_datetime(df["time"])
+                                df = df.set_index("time")
+                            df = df[[c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]]
+                            piv = pivots_from_df(df)
+                            if piv is not None:
+                                metrics["pivots"] = piv
+                        except Exception:
+                            # not a DataFrame-like structure we can use — skip
+                            pass
+            except Exception:
+                # pivot computation failed (module missing or error) — ignore silently
+                pass
+
+        out["metrics"] = metrics
+    except Exception:
+        out["metrics"] = {}
+
 
         # compute lightweight Elliott snapshot (defensive)
         try:
