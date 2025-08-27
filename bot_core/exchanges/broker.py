@@ -64,6 +64,31 @@ class Broker:
         # allow either OrderStore or compatibility alias
         self.order_store = order_store or OrderSQLiteStore()
         self._has = lambda name: bool(getattr(self.adapter, name, None))
+    def connect(self) -> bool:
+        """
+        Ensure the adapter is connected.
+
+        Behavior:
+        - If the adapter provides a callable `connect()`, call it and return its boolean result.
+        - If the adapter has `_connected` attribute (some mocks use that), return it.
+        - Otherwise assume already connected and return True.
+        """
+        if self.adapter is None:
+            raise RuntimeError("No adapter provided to Broker; cannot connect")
+
+        # If adapter defines a connect() method, call it (and return result)
+        conn_fn = getattr(self.adapter, "connect", None)
+        if callable(conn_fn):
+            res = conn_fn()
+            return bool(res)
+
+        # Fallback: some test mocks set _connected attribute
+        if hasattr(self.adapter, "_connected"):
+            return bool(getattr(self.adapter, "_connected"))
+
+        # No explicit connect — assume already connected / no-op
+        return True
+
 
     def _normalize_order_response(self, res: Any, side: Optional[str] = None, symbol: Optional[str] = None, amount: Optional[float] = None) -> Dict[str, Any]:
         out = {"id": None, "status": None, "symbol": symbol, "side": side, "amount": amount, "filled": 0.0, "price": None, "raw": None}
