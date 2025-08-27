@@ -92,8 +92,14 @@ class ExchangeAdapter(ABC):
 
     @abstractmethod
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", since: int = None, limit: int = 500, **kwargs) -> List:
-        """Return OHLCV data (list of rows or DataFrame-like)."""
-        raise NotImplementedError
+        """
+        Optional: return OHLCV data (list of rows or DataFrame-like).
+
+        Default implementation raises NotImplementedError so minimal/dummy adapters
+        do not need to implement this method unless they require OHLCV support.
+        """
+        raise NotImplementedError("fetch_ohlcv is not implemented for this adapter")
+
 
     # ---------------------------
     # Orders
