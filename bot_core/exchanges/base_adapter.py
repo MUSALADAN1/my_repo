@@ -43,7 +43,6 @@ class BaseAdapter(ABC):
         """Get the latest ticker for a symbol."""
         raise NotImplementedError
 
-    @abstractmethod
     def fetch_ohlcv(
         self,
         symbol: str,

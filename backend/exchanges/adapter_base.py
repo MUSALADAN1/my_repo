@@ -90,7 +90,6 @@ class ExchangeAdapter(ABC):
         """Return a representation of balances."""
         raise NotImplementedError
 
-    @abstractmethod
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", since: int = None, limit: int = 500, **kwargs) -> List:
         """
         Optional: return OHLCV data (list of rows or DataFrame-like).

@@ -88,8 +88,72 @@ class Broker:
 
         # No explicit connect — assume already connected / no-op
         return True
+    def place_order(self, symbol: str, side: str, amount: float, price: Optional[float] = None, order_type: str = "market", **kwargs) -> Dict[str, Any]:
+        """
+        Delegate safely to adapter.place_order. Filters unexpected kwargs based on adapter signature.
+        Returns a normalized dict via _normalize_order_response and records to order_store (best-effort).
+        """
+        if self.adapter is None:
+            raise RuntimeError("No adapter available on Broker to place order")
 
+        fn = getattr(self.adapter, "place_order", None)
+        if fn is None or not callable(fn):
+            raise RuntimeError("adapter does not implement place_order")
 
+        # Try direct call first
+        try:
+            res = fn(symbol, side, amount, price, order_type, **kwargs)
+        except TypeError:
+            # Filter kwargs by inspecting signature
+            try:
+                import inspect
+                sig = inspect.signature(fn)
+                accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                if accepts_var_kw:
+                    call_kwargs = {**{"symbol": symbol, "side": side, "amount": amount, "price": price, "order_type": order_type}, **kwargs}
+                    res = fn(**call_kwargs)
+                else:
+                    allowed = {}
+                    combined = {**{"symbol": symbol, "side": side, "amount": amount, "price": price, "order_type": order_type}, **kwargs}
+                    for k in combined:
+                        if k in sig.parameters:
+                            allowed[k] = combined[k]
+                    # Try to call with positional or keyword depending on signature
+                    try:
+                        res = fn(**allowed)
+                    except TypeError:
+                        # Last-ditch: call by positional args (some adapters use positional-only)
+                        res = fn(symbol, side, amount, price, order_type)
+            except Exception:
+                # re-raise original TypeError for visibility if we couldn't adapt
+                raise
+
+        norm = self._normalize_order_response(res, side=side, symbol=symbol, amount=amount)
+
+        # Ensure id exists
+        oid = norm.get("id") or f"ord-{symbol}-{side}-{int(time.time() * 1000)}"
+        norm["id"] = oid
+        status = norm.get("status") or ("filled" if norm.get("filled") and norm.get("filled") == norm.get("amount") else "submitted")
+        norm["status"] = status
+
+        # Persist (best effort)
+        try:
+            self.order_store.record_new_order({
+                "id": norm["id"],
+                "symbol": norm.get("symbol"),
+                "side": norm.get("side"),
+                "amount": norm.get("amount"),
+                "filled": norm.get("filled"),
+                "price": norm.get("price"),
+                "status": norm.get("status"),
+                "raw": norm.get("raw"),
+            })
+        except Exception:
+            pass
+
+        return norm
+    
+    
     def _normalize_order_response(self, res: Any, side: Optional[str] = None, symbol: Optional[str] = None, amount: Optional[float] = None) -> Dict[str, Any]:
         out = {"id": None, "status": None, "symbol": symbol, "side": side, "amount": amount, "filled": 0.0, "price": None, "raw": None}
         if res is None:

@@ -67,7 +67,7 @@ class ExchangeAdapter(ABC):
     # ---------------------------
     # Lifecycle / connectivity
     # ---------------------------
-    @abstractmethod
+    
     def connect(self, **kwargs) -> bool:
         """Establish connection to the exchange (authenticate if required)."""
         raise NotImplementedError
@@ -80,17 +80,16 @@ class ExchangeAdapter(ABC):
     # ---------------------------
     # Market data / account
     # ---------------------------
-    @abstractmethod
+    
     def fetch_ticker(self, symbol: str, **kwargs) -> Dict[str, Any]:
         """Return basic ticker info for symbol (bid/ask/last)."""
         raise NotImplementedError
 
-    @abstractmethod
+    
     def fetch_balance(self, **kwargs) -> Dict[str, Any]:
         """Return a representation of balances."""
         raise NotImplementedError
 
-    @abstractmethod
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", since: int = None, limit: int = 500, **kwargs) -> List:
         """
         Optional: return OHLCV data (list of rows or DataFrame-like).
@@ -104,7 +103,7 @@ class ExchangeAdapter(ABC):
     # ---------------------------
     # Orders
     # ---------------------------
-    @abstractmethod
+    
     def place_order(self, symbol: str, side: str, amount: float, price: float = None, order_type: str = "market", **kwargs) -> Dict[str, Any]:
         """
         Place an order; return a dict with at least 'id' and 'status'.
@@ -112,17 +111,16 @@ class ExchangeAdapter(ABC):
         """
         raise NotImplementedError
 
-    @abstractmethod
+    
     def cancel_order(self, order_id: str, **kwargs) -> bool:
         """Cancel given order_id; return True if cancelled."""
         raise NotImplementedError
 
-    @abstractmethod
+    
     def fetch_order(self, order_id: str, symbol: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """Fetch a single order by id."""
         raise NotImplementedError
 
-    @abstractmethod
     def fetch_open_orders(self, symbol: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
         """List open orders."""
         raise NotImplementedError
