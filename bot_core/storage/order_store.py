@@ -56,15 +56,17 @@ class OrderStore:
         self._conn.commit()
 
     # Compatibility alias expected by tests
-    def persist_order(self, order: Dict[str, Any]) -> None:
+    # Compatibility alias expected by tests
+    def persist_order(self, order: Dict[str, Any]) -> Optional[str]:
         """
-        Compatibility method name. Delegates to record_new_order.
+        Compatibility method name. Delegates to record_new_order and returns the order id.
         """
         return self.record_new_order(order)
 
-    def record_new_order(self, order: Dict[str, Any]) -> None:
+    def record_new_order(self, order: Dict[str, Any]) -> Optional[str]:
         """
         Insert a new order record. order must include: id, symbol, side, amount, status (optional).
+        Returns order id on success.
         """
         oid = str(order.get("id") or order.get("order_id") or order.get("orderId") or "")
         if not oid:
@@ -92,9 +94,42 @@ class OrderStore:
             (oid, symbol, side, amount, filled, price, status, now, now, raw_json)
         )
         self._conn.commit()
+        return oid
+
+    def list_orders(self, status: Optional[str] = None) -> list:
+        """
+        Return list of orders optionally filtered by status.
+        """
+        cur = self._conn.cursor()
+        if status:
+            cur.execute("SELECT id, symbol, side, amount, filled, price, status, created_ts, updated_ts, raw_json FROM orders WHERE status = ?", (status,))
+        else:
+            cur.execute("SELECT id, symbol, side, amount, filled, price, status, created_ts, updated_ts, raw_json FROM orders")
+        rows = cur.fetchall()
+        out = []
+        for row in rows:
+            oid, symbol, side, amount, filled, price, status, created_ts, updated_ts, raw_json = row
+            try:
+                raw = json.loads(raw_json) if raw_json else None
+            except Exception:
+                raw = raw_json
+            out.append({
+                "id": oid,
+                "symbol": symbol,
+                "side": side,
+                "amount": amount,
+                "filled": filled,
+                "price": price,
+                "status": status,
+                "created_ts": created_ts,
+                "updated_ts": updated_ts,
+                "raw": raw
+            })
+        return out
+
 
     def update_order_state(self, order_id: str, status: str, filled: Optional[float] = None,
-                           price: Optional[float] = None, raw: Optional[Dict[str, Any]] = None) -> None:
+                            price: Optional[float] = None, raw: Optional[Dict[str, Any]] = None) -> None:
         now = time.time()
         cur = self._conn.cursor()
         cur.execute("SELECT amount, filled, price, raw_json FROM orders WHERE id = ?", (order_id,))

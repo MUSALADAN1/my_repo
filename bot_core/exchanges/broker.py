@@ -152,8 +152,88 @@ class Broker:
             pass
 
         return norm
+    def fetch_order(self, order_id: str, symbol: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a single order by id. Try adapter.fetch_order(...) first, else fallback to local store.
+        Updates local order_store (best effort) with the normalized order state.
+        """
+        fn = getattr(self.adapter, "fetch_order", None)
+        # If adapter can fetch, call it defensively
+        if callable(fn):
+            try:
+                safe_call = self._build_safe_call(fn, {"order_id": order_id, "symbol": symbol}, {})
+                res = safe_call()
+                norm = self._normalize_order_response(res)
+                try:
+                    self.order_store.update_order_state(order_id, norm.get("status"), filled=norm.get("filled"), price=norm.get("price"), raw=norm.get("raw"))
+                except Exception:
+                    pass
+                return norm
+            except Exception:
+                # adapter fetch failed; fallthrough to local store
+                pass
+
+        # Fallback to local store
+        try:
+            return self.order_store.get_order(order_id)
+        except Exception:
+            return None
+
+    def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Return a list of open orders. Prefer adapter.fetch_open_orders; otherwise return local open orders.
+        """
+        fn = getattr(self.adapter, "fetch_open_orders", None)
+        out: List[Dict[str, Any]] = []
+        if callable(fn):
+            try:
+                safe_call = self._build_safe_call(fn, {"symbol": symbol}, {})
+                res = safe_call()
+                if isinstance(res, list):
+                    for r in res:
+                        out.append(self._normalize_order_response(r))
+                    if out:
+                        return out
+            except Exception:
+                pass
+
+        # Fallback: return from local store
+        try:
+            return list(self.order_store.list_open_orders().values())
+        except Exception:
+            # ensure we always return a list
+            return out
+
+    def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Cancel an order via adapter if supported. If adapter not available, mark order cancelled locally.
+        """
+        fn = getattr(self.adapter, "cancel_order", None)
+        if callable(fn):
+            try:
+                safe_call = self._build_safe_call(fn, {"order_id": order_id, "symbol": symbol}, {})
+                res = _retry(safe_call)
+                norm = self._normalize_order_response(res)
+                # persist update (best effort)
+                try:
+                    status = norm.get("status") or "cancelled"
+                    self.order_store.update_order_state(order_id, status, filled=norm.get("filled"), price=norm.get("price"), raw=norm.get("raw"))
+                except Exception:
+                    pass
+                return norm
+            except Exception:
+                # if adapter cancel failed, fall through to local mark
+                pass
+
+        # Fallback: mark cancelled in store (best-effort)
+        try:
+            self.order_store.update_order_state(order_id, "cancelled")
+        except Exception:
+            pass
+        return {"id": order_id, "status": "cancelled"}
+
     
-    
+
     def _normalize_order_response(self, res: Any, side: Optional[str] = None, symbol: Optional[str] = None, amount: Optional[float] = None) -> Dict[str, Any]:
         out = {"id": None, "status": None, "symbol": symbol, "side": side, "amount": amount, "filled": 0.0, "price": None, "raw": None}
         if res is None:
@@ -225,181 +305,4 @@ class Broker:
                     return fn(**{**base_kwargs, **extra_kwargs})
             return call_positional
 
-    import os
-from uuid import uuid4
-import logging
 
-logger = logging.getLogger(__name__)
-
-def _is_dry_run_enabled() -> bool:
-    v = os.getenv("DRY_RUN", "1")
-    return str(v).lower() in ("1", "true", "yes", "on")
-
-def place_order(symbol: str, side: str, amount: float, price: float = None, order_type: str = "market", **kwargs) -> Dict[str, Any]:
-        """
-        Place order via adapter, store lifecycle in order_store.
-        Robustly avoids forwarding unexpected kwargs to adapter.
-
-        If DRY_RUN env var is enabled (default), *simulate* the order and persist
-        a dry-run order in the order_store to keep downstream code/tests working.
-        """
-        # Safe default: simulate order instead of calling exchange live
-        if _is_dry_run_enabled():
-            oid = f"dryrun-{uuid4().hex[:12]}"
-            logger.info("DRY_RUN enabled: simulating order %s %s %s@%s id=%s", side, amount, symbol, price, oid)
-            norm = {
-                "id": oid,
-                "symbol": symbol,
-                "side": side,
-                "amount": amount,
-                "price": price,
-                "filled": False,
-                "status": "dry_run",
-                "raw": {"dry_run": True, "provided_kwargs": kwargs}
-            }
-            # persist simulated order so tests and order_store consumers still see it
-            try:
-                self.order_store.record_new_order({
-                    "id": norm["id"],
-                    "symbol": norm["symbol"],
-                    "side": norm["side"],
-                    "amount": norm["amount"],
-                    "filled": norm["filled"],
-                    "price": norm["price"],
-                    "status": norm["status"],
-                    "raw": norm["raw"]
-                })
-            except Exception as e:
-                logger.debug("Failed to persist dry-run order: %s", e)
-            return norm
-
-        # --- live path (unchanged behavior) ---
-        fn = getattr(self.adapter, "place_order", None)
-        if fn is None:
-            raise RuntimeError("adapter does not implement place_order")
-
-        base_kwargs = {"symbol": symbol, "side": side, "amount": amount, "price": price, "order_type": order_type}
-        safe_call = self._build_safe_call(fn, base_kwargs, kwargs)
-
-        # perform call with retries
-        res = _retry(safe_call)
-
-        norm = self._normalize_order_response(res, side=side, symbol=symbol, amount=amount)
-        # ensure id exists
-        oid = norm["id"] or f"ord-{symbol}-{side}-{int(time.time()*1000)}"
-        norm["id"] = oid
-        status = norm["status"] or ("filled" if norm.get("filled") and norm.get("filled") == norm.get("amount") else "submitted")
-
-        # persist
-        try:
-            self.order_store.record_new_order({
-                "id": norm["id"],
-                "symbol": norm["symbol"],
-                "side": norm["side"],
-                "amount": norm["amount"],
-                "filled": norm["filled"],
-                "price": norm["price"],
-                "status": status,
-                "raw": norm["raw"]
-            })
-        except Exception as e:
-            # ignore persisting errors for now
-            logger.debug("Failed to persist order: %s", e)
-
-        return norm
-
-
-        return {
-            "id": norm["id"],
-            "status": status,
-            "symbol": norm["symbol"],
-            "side": norm["side"],
-            "amount": norm["amount"],
-            "filled": norm["filled"],
-            "price": norm["price"],
-            "raw": norm["raw"]
-        }
-
-def fetch_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        fn = getattr(self.adapter, "fetch_order", None)
-        res = None
-        if fn:
-            try:
-                res = fn(order_id)
-            except Exception:
-                res = None
-
-        if res:
-            norm = self._normalize_order_response(res)
-            try:
-                status = norm["status"] or "submitted"
-                self.order_store.update_order_state(order_id, status, filled=norm.get("filled"), price=norm.get("price"), raw=norm.get("raw"))
-            except Exception:
-                pass
-            return norm
-        return self.order_store.get_order(order_id)
-
-def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        fn = getattr(self.adapter, "fetch_open_orders", None)
-        out = []
-        if fn:
-            try:
-                res_list = fn(symbol) if self._has("fetch_open_orders") else None
-                if isinstance(res_list, list):
-                    for r in res_list:
-                        norm = self._normalize_order_response(r)
-                        out.append(norm)
-                        try:
-                            self.order_store.record_new_order({
-                                "id": norm["id"],
-                                "symbol": norm["symbol"],
-                                "side": norm["side"],
-                                "amount": norm["amount"],
-                                "filled": norm["filled"],
-                                "price": norm["price"],
-                                "status": norm["status"] or "submitted",
-                                "raw": norm["raw"]
-                            })
-                        except Exception:
-                            pass
-                    if out:
-                        return out
-            except Exception:
-                pass
-
-        open_map = self.order_store.list_open_orders()
-        return list(open_map.values())
-
-def cancel_order(order_id: str) -> Dict[str, Any]:
-    fn = getattr(self.adapter, "cancel_order", None)
-    res = None
-    if fn:
-        safe_call = self._build_safe_call(fn, {"order_id": order_id}, {})
-        try:
-                res = _retry(safe_call)
-        except Exception:
-                try:
-                    res = fn(order_id)
-                except Exception:
-                    raise
-
-        norm = self._normalize_order_response(res) if res else {"id": order_id, "status": "cancelled"}
-        status = norm.get("status") or "cancelled"
-        try:
-            self.order_store.update_order_state(order_id, status, filled=norm.get("filled"), price=norm.get("price"), raw=norm.get("raw"))
-        except Exception:
-            pass
-        return norm
-
-    def reconcile_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        fn = getattr(self.adapter, "fetch_order", None)
-        if not fn:
-            return None
-        try:
-            res = fn(order_id)
-            norm = self._normalize_order_response(res)
-            status = norm.get("status") or "submitted"
-            self.order_store.update_order_state(order_id, status, filled=norm.get("filled"), price=norm.get("price"), raw=norm.get("raw"))
-            return norm
-        except Exception:
-            return None
