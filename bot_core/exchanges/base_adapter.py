@@ -22,23 +22,23 @@ class BaseAdapter(ABC):
         self.config = config or {}
 
     # --- connection lifecycle ---
-    @abstractmethod
+    
     def connect(self) -> None:
         """Connect/authenticate to the exchange/broker."""
         raise NotImplementedError
 
-    @abstractmethod
+    
     def disconnect(self) -> None:
         """Disconnect/cleanup."""
         raise NotImplementedError
 
-    @abstractmethod
+    
     def is_connected(self) -> bool:
         """Return True if connection is active."""
         raise NotImplementedError
 
     # --- market data ---
-    @abstractmethod
+    
     def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
         """Get the latest ticker for a symbol."""
         raise NotImplementedError
@@ -54,18 +54,18 @@ class BaseAdapter(ABC):
         raise NotImplementedError
 
     # --- account / positions ---
-    @abstractmethod
+    
     def fetch_balance(self) -> Dict[str, Any]:
         """Return account balance information."""
         raise NotImplementedError
 
-    @abstractmethod
+    
     def fetch_positions(self) -> List[Dict[str, Any]]:
         """Return open positions."""
         raise NotImplementedError
 
     # --- orders ---
-    @abstractmethod
+    
     def create_order(
         self,
         symbol: str,
@@ -78,17 +78,15 @@ class BaseAdapter(ABC):
         """Place an order."""
         raise NotImplementedError
 
-    @abstractmethod
+    
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Cancel an order."""
         raise NotImplementedError
 
-    @abstractmethod
     def fetch_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Fetch a single order by id."""
         raise NotImplementedError
 
-    @abstractmethod
     def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """List open orders."""
         raise NotImplementedError
@@ -97,3 +95,18 @@ class BaseAdapter(ABC):
     def normalize_symbol(self, symbol: str) -> str:
         """Optional: convert 'EURUSD' → 'EUR/USD' depending on exchange."""
         return symbol
+    
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        price: Optional[float] = None,
+        order_type: str = "market",
+        params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Compatibility shim: call create_order if adapter implements it."""
+        create_fn = getattr(self, "create_order", None)
+        if callable(create_fn):
+            return create_fn(symbol, side, order_type, amount, price, params)
+        raise NotImplementedError

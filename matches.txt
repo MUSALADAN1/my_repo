@@ -1,0 +1,2 @@
+bot_core\intraday_trading_bot.py:949:def generate_signals(equity):
+bot_core\intraday_trading_bot.py:1140:                signals = generate_signals(equity)

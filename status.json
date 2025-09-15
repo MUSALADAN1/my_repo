@@ -1,0 +1,16 @@
+{
+  "strategies": [{"name":"TrendFollowing","status":"idle","positions":0,"pnl":0}],
+  "zones": [{"type":"resistance","center":105.0,"min_price":104.9,"max_price":105.1,"strength":1.2}],
+  "metrics": {
+    "signals_skipped_by_zone": 2,
+    "open_positions": 0,
+    "net_pnl": 123.45,
+    "win_rate": 0.62,
+    "equity_curve": [1000, 1002, 1004, 1001, 1010, 1015],
+    "trade_log": [
+      {"time":"2025-08-25T15:00:00Z","symbol":"BTC/USDT","side":"buy","amount":0.01,"price":30000,"pnl":5.2},
+      {"time":"2025-08-25T15:10:00Z","symbol":"BTC/USDT","side":"sell","amount":0.01,"price":30050,"pnl":10.0}
+    ]
+  },
+  "last_update":"2025-08-25T15:00:00Z"
+}

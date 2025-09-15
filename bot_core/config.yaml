@@ -1,0 +1,77 @@
+risk_pct: 1.0
+symbols:
+- GBPUSDm
+- USDJPYm
+- XAUUSDm
+- BTCUSDm
+- USDCADm
+- GBPJPYm
+telegram:
+  token: 7753112854:AAFA0Y-IFH8SB1rxRiG6vNDZqM_pjRUZP7c
+  chat_id: '6577914440'
+log_file: trade_log.xlsx
+spread_limit: 30
+trade_cooldown_minutes: 10
+max_drawdown_pct: 10.0
+daily_report_hour: 0
+sessions:
+  Sydney:
+  - 22
+  - 6
+  Tokyo:
+  - 0
+  - 8
+  London:
+  - 8
+  - 16
+  NewYork:
+  - 13
+  - 21
+td_api_key: f96a350e2c7d4f9cbf0db0078117df7b
+optimization:
+  sl: 0.005
+  tp: 0.002
+  fib_tol: 0.0005
+optimization_per_symbol:
+  GBPUSDm:
+    sl: 0.005
+    tp: 0.002
+    fib_tol: 0.0005
+    win_rate: 1.0
+    profit_factor: .inf
+    walk_forward: 0.0
+  USDJPYm:
+    sl: 0.005
+    tp: 0.002
+    fib_tol: 0.0005
+    win_rate: 0.04
+    profit_factor: 0.02
+    walk_forward: 0.11
+  XAUUSDm:
+    sl: 0.005
+    tp: 0.002
+    fib_tol: 0.0005
+    win_rate: 0.0
+    profit_factor: 0.0
+    walk_forward: 0.0
+  BTCUSDm:
+    sl: 0.005
+    tp: 0.002
+    fib_tol: 0.0005
+    win_rate: 0.0
+    profit_factor: 0.0
+    walk_forward: 0.0
+  USDCADm:
+    sl: 0.005
+    tp: 0.002
+    fib_tol: 0.0005
+    win_rate: 1.0
+    profit_factor: .inf
+    walk_forward: 0.0
+  GBPJPYm:
+    sl: 0.005
+    tp: 0.002
+    fib_tol: 0.0005
+    win_rate: 0.0
+    profit_factor: 0.0
+    walk_forward: 0.11

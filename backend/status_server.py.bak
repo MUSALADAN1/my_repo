@@ -1,0 +1,65 @@
+# backend/status_server.py
+from flask import Flask, jsonify, send_from_directory, request
+import json
+import os
+from datetime import datetime
+
+app = Flask(__name__)
+
+# prefer the project's frontend/public/status.json for demo/backfilled state
+STATIC_STATUS = os.path.join(os.path.dirname(__file__), "..", "frontend", "public", "status.json")
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    try:
+        if os.path.exists(STATIC_STATUS):
+            with open(STATIC_STATUS, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # augment with a server timestamp
+                data.setdefault("last_update", datetime.utcnow().isoformat() + "Z")
+                return jsonify(data)
+        # fallback minimal payload
+        payload = {
+            "strategies": [
+                {"name": "TrendFollowing", "status": "running", "pnl": 0.0, "positions": 0}
+            ],
+            "zones": [],
+            "last_update": datetime.utcnow().isoformat() + "Z"
+        }
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/config", methods=["GET"])
+def api_config():
+    # return a tiny config the frontend might expect; extend as needed
+    cfg = {
+        "app": "my_trading_bot",
+        "version": "dev",
+        "api_base": "/api",
+    }
+    return jsonify(cfg)
+
+@app.route("/api/start", methods=["POST"])
+def api_start():
+    # accept body with {"strategy": "..."} and return a fake started response
+    try:
+        body = request.get_json(silent=True) or {}
+        strategy = body.get("strategy", "unknown")
+        # in the real app this would start a worker; here we simply acknowledge
+        return jsonify({"ok": True, "started": strategy}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    try:
+        body = request.get_json(silent=True) or {}
+        strategy = body.get("strategy", "unknown")
+        return jsonify({"ok": True, "stopped": strategy}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+if __name__ == "__main__":
+    # Run on port 5000 to match the react dev proxy
+    app.run(host="127.0.0.1", port=5000, debug=True)

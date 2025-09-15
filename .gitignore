@@ -1,0 +1,20 @@
+# Secrets & env
+.env
+config.py
+credentials.json
+secrets/
+*.key
+*.pem
+*.crt
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors & IDEs
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

@@ -15,9 +15,15 @@ Functions:
   - true_range
   - atr
   - parabolic_sar
+  - adx / ADX
+  - ichimoku / ICHIMOKU
+  - pivot_points (classic/fibonacci)
+  - support_resistance_levels
+  - swing_points, sr_levels_from_swings
+  - aggregate_swings_to_zones, sr_zones_from_series
 """
 
-from typing import Iterable, Union, Dict
+from typing import Iterable, Union, Dict, Any, List
 import pandas as pd
 import numpy as np
 import math
@@ -159,6 +165,7 @@ def atr(high: SeriesLike, low: SeriesLike, close: SeriesLike, window: int = 14, 
     else:
         raise ValueError("method must be 'sma' or 'wilder'")
 
+
 # ADX (Average Directional Index) and DI (Directional Indicators)
 def adx(high: SeriesLike, low: SeriesLike, close: SeriesLike, period: int = 14) -> pd.DataFrame:
     """
@@ -219,6 +226,7 @@ def adx(high: SeriesLike, low: SeriesLike, close: SeriesLike, period: int = 14) 
 def ADX(high: SeriesLike, low: SeriesLike, close: SeriesLike, period: int = 14) -> pd.DataFrame:
     return adx(high, low, close, period=period)
 
+
 def ichimoku(
     high: SeriesLike,
     low: SeriesLike,
@@ -230,20 +238,6 @@ def ichimoku(
 ) -> pd.DataFrame:
     """
     Ichimoku Kinko Hyo indicator.
-
-    Returns a DataFrame with columns:
-      - 'tenkan'     : Tenkan-sen (conversion line)
-      - 'kijun'      : Kijun-sen (base line)
-      - 'senkou_a'   : Senkou Span A (leading span A) shifted forward by `shift`
-      - 'senkou_b'   : Senkou Span B (leading span B) shifted forward by `shift`
-      - 'chikou'     : Chikou Span (lagging span) shifted backward by `shift`
-
-    Args:
-        high, low, close: series-like inputs
-        tenkan: period for Tenkan-sen (default 9)
-        kijun: period for Kijun-sen (default 26)
-        senkou_b: period for Senkou Span B (default 52)
-        shift: forward shift (usually equal to kijun, default 26)
     """
     # ensure series
     high_s = _ensure_series(high).astype(float)
@@ -263,12 +257,12 @@ def ichimoku(
     # Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2 shifted forward by `shift`
     senkou_a = ((tenkan_s + kijun_s) / 2.0).shift(shift)
 
-    # Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2 shifted forward by `shift`
+    # Senkou Span B (Leading Span B): (senkou_b-period high + low)/2 shifted forward by `shift`
     senkou_b_high = high_s.rolling(window=senkou_b, min_periods=1).max()
     senkou_b_low = low_s.rolling(window=senkou_b, min_periods=1).min()
     senkou_b_s = ((senkou_b_high + senkou_b_low) / 2.0).shift(shift)
 
-    # Chikou Span (Lagging Span): close shifted backward by `shift` (i.e., lead index by -shift)
+    # Chikou Span (Lagging Span): close shifted backward by `shift`
     chikou = close_s.shift(-shift)
 
     result = pd.DataFrame(
@@ -297,32 +291,14 @@ def ICHIMOKU(
 ) -> pd.DataFrame:
     return ichimoku(high, low, close, tenkan=tenkan, kijun=kijun, senkou_b=senkou_b, shift=shift)
 
+
 # ----------------------------
 # Pivot Points & Support/Resistance
 # ----------------------------
 def pivot_points(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: str = "classic") -> pd.DataFrame:
     """
     Compute pivot points and support/resistance levels.
-
-    Methods supported:
-      - "classic" : PP = (H+L+C)/3
-          R1 = (2*PP) - L
-          S1 = (2*PP) - H
-          R2 = PP + (H - L)
-          S2 = PP - (H - L)
-          R3 = H + 2*(PP - L)
-          S3 = L - 2*(H - PP)
-
-      - "fibonacci": uses Fibonacci retracement multiples on (H-L)
-          R1 = PP + 0.382*(H - L)
-          S1 = PP - 0.382*(H - L)
-          R2 = PP + 0.618*(H - L)
-          S2 = PP - 0.618*(H - L)
-          R3 = PP + 1.000*(H - L)
-          S3 = PP - 1.000*(H - L)
-
-    Returns a DataFrame with columns:
-      'pp', 'r1', 's1', 'r2', 's2', 'r3', 's3'
+    Supports 'classic' and 'fibonacci'.
     """
     h = _ensure_series(high).astype(float)
     l = _ensure_series(low).astype(float)
@@ -340,7 +316,6 @@ def pivot_points(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: s
         r3 = h + 2 * (pp - l)
         s3 = l - 2 * (h - pp)
     elif method in ("fibonacci", "fibo", "fib"):
-        # Fibonacci multipliers commonly used: 38.2%, 61.8%, 100%
         r1 = pp + 0.382 * range_hl
         s1 = pp - 0.382 * range_hl
         r2 = pp + 0.618 * range_hl
@@ -363,18 +338,9 @@ def pivot_points(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: s
     return df
 
 
-
 def support_resistance_levels(high: SeriesLike, low: SeriesLike, close: SeriesLike, method: str = "classic") -> dict:
     """
     Convenience helper returning the latest pivot and S/R levels as a dict.
-
-    Example return:
-    {
-        'pp': 1.2345,
-        'r1': 1.2456,
-        's1': 1.2234,
-        ...
-    }
     """
     df = pivot_points(high, low, close, method=method)
     last = df.iloc[-1]
@@ -388,6 +354,7 @@ def support_resistance_levels(high: SeriesLike, low: SeriesLike, close: SeriesLi
         "s3": float(last["s3"]),
     }
 
+
 # ----------------------------
 # Swing high / Swing low detection (basic support/resistance levels)
 # ----------------------------
@@ -397,15 +364,6 @@ def swing_points(high: SeriesLike, low: SeriesLike, left: int = 3, right: int = 
 
     A swing high at index i is where high[i] is greater than the highs in the
     'left' bars before it and the 'right' bars after it. Similarly for swing low.
-
-    Args:
-        high, low: series-like arrays (same length)
-        left: number of bars to the left to consider
-        right: number of bars to the right to consider
-
-    Returns:
-        DataFrame with columns: ['swing_high', 'swing_low', 'high', 'low']
-        Boolean columns indicate swing points at that index.
     """
     h = _ensure_series(high).astype(float).reset_index(drop=True)
     l = _ensure_series(low).astype(float).reset_index(drop=True)
@@ -417,7 +375,6 @@ def swing_points(high: SeriesLike, low: SeriesLike, left: int = 3, right: int = 
     if n == 0:
         return pd.DataFrame({"swing_high": swing_high, "swing_low": swing_low, "high": h, "low": l})
 
-    # iterate through feasible indices
     for i in range(left, n - right):
         left_h = h.iloc[i - left : i]
         right_h = h.iloc[i + 1 : i + 1 + right]
@@ -429,7 +386,6 @@ def swing_points(high: SeriesLike, low: SeriesLike, left: int = 3, right: int = 
         if (l.iloc[i] < left_l.min()) and (l.iloc[i] < right_l.min()):
             swing_low.iloc[i] = True
 
-    # restore original index if input had one
     result = pd.DataFrame({
         "swing_high": swing_high,
         "swing_low": swing_low,
@@ -444,9 +400,6 @@ def sr_levels_from_swings(high: SeriesLike, low: SeriesLike, left: int = 3, righ
     """
     Convenience extractor that returns a list of support/resistance levels
     from detected swing points.
-
-    Returns list of dicts:
-      [{'index': <int>, 'price': <float>, 'type': 'resistance'|'support'}, ...]
     """
     df = swing_points(high, low, left=left, right=right)
     levels = []
@@ -454,9 +407,9 @@ def sr_levels_from_swings(high: SeriesLike, low: SeriesLike, left: int = 3, righ
         levels.append({"index": int(idx), "price": float(row["high"]), "type": "resistance"})
     for idx, row in df[df["swing_low"]].iterrows():
         levels.append({"index": int(idx), "price": float(row["low"]), "type": "support"})
-    # sort by index (chronological)
     levels.sort(key=lambda x: x["index"])
     return levels
+
 
 # ----------------------------
 # Aggregate nearby swing points into supply/demand zones (strength scoring)
@@ -465,36 +418,26 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
     """
     Aggregate swing points into zones.
 
-    Args:
-        swings: list of swings like [{'index': int, 'price': float, 'type': 'support'|'resistance'}, ...]
-                expected to be chronological (sorted by index) but not strictly required.
-        price_tolerance: relative tolerance (fraction) within which swings are considered the same zone,
-                         e.g., 0.002 == 0.2%.
-        min_points: minimum number of swings required for a zone to be kept.
+    Uses a hybrid tolerance check:
+      - absolute difference <= price_tolerance
+      OR
+      - relative difference <= price_tolerance (fraction of center)
 
-    Returns:
-        List of zone dicts sorted by descending strength. Zone dict keys:
-          - 'type': 'support' or 'resistance'
-          - 'center': average price of zone members
-          - 'min_price', 'max_price': bounds of zone
-          - 'count': number of swing members
-          - 'indices': list of member indices (ints)
-          - 'strength': numeric score (count / (1 + normalized_width)) with higher = stronger
+    This covers both small-magnitude prices (absolute tolerance) and larger prices
+    where a fractional tolerance is more appropriate.
     """
     if not swings:
         return []
 
-    # Separate by type
+    # Separate by type while preserving input order
     by_type = {"support": [], "resistance": []}
     for s in swings:
         t = s.get("type")
-        if t not in ("support", "resistance"):
-            continue
-        by_type[t].append(s)
+        if t in by_type:
+            by_type[t].append(s)
 
     zones = []
     for t, items in by_type.items():
-        # iterate swings for this type and group by relative proximity
         for swing in items:
             price = float(swing["price"])
             idx = int(swing.get("index", -1))
@@ -503,11 +446,13 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
                 if zone["type"] != t:
                     continue
                 center = zone["center"]
-                # absolute tolerance: treat price_tolerance as absolute price difference
-                # (this matches test expectations where 0.981 - 0.980 == 0.001 should be grouped when tolerance=0.001)
+
+                # absolute dif
                 rel_abs = abs(price - center)
+                # relative dif (fraction)
+                rel_rel = abs(price - center) / (abs(center) if center != 0 else 1.0)
                 eps = 1e-12
-                if rel_abs <= price_tolerance + eps:
+                if (rel_abs <= price_tolerance + eps) or (rel_rel <= price_tolerance + eps):
                     # add to existing zone
                     zone["prices"].append(price)
                     zone["indices"].append(idx)
@@ -518,7 +463,6 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
                     placed = True
                     break
             if not placed:
-                # create new zone
                 zones.append({
                     "type": t,
                     "prices": [price],
@@ -529,14 +473,11 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
                     "count": 1,
                 })
 
-
     # finalize zones and compute strength
     result = []
     for z in zones:
         width = max(1e-12, z["max_price"] - z["min_price"])
-        # normalized width relative to center (avoid divide by zero)
         norm_width = width / (abs(z["center"]) if z["center"] != 0 else 1.0)
-        # strength: prefers many members and narrow zones
         strength = z["count"] / (1.0 + norm_width)
         result.append({
             "type": z["type"],
@@ -548,9 +489,7 @@ def aggregate_swings_to_zones(swings: list, price_tolerance: float = 0.002, min_
             "strength": float(strength),
         })
 
-    # filter small zones
     filtered = [z for z in result if z["count"] >= int(min_points)]
-    # sort by strength desc (strongest first)
     filtered.sort(key=lambda x: x["strength"], reverse=True)
     return filtered
 
@@ -559,8 +498,6 @@ def sr_zones_from_series(high: SeriesLike, low: SeriesLike, left: int = 3, right
                          price_tolerance: float = 0.002, min_points: int = 1) -> list:
     """
     Convenience helper: detect swings from series and aggregate them into zones.
-
-    Returns same format as aggregate_swings_to_zones.
     """
     swings = sr_levels_from_swings(high, low, left=left, right=right)
     return aggregate_swings_to_zones(swings, price_tolerance=price_tolerance, min_points=min_points)

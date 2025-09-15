@@ -1,0 +1,4 @@
+- bot_core/intraday_trading_bot.py — modified: standardized adapter-first order placement
+- tests/test_adapter_order_smoke.py — added: smoke test for adapter create_order/modify_position
+- tests/test_adapter_order_smoke.py — modified: corrected create_order signature in smoke test (type='market')
+- backend/bot_controller.py — modified: defensive MT5 import (fail-safe if MetaTrader5 missing)

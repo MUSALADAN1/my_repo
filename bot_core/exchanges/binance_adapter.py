@@ -84,7 +84,8 @@ class BinanceAdapter(ExchangeAdapter):
 
         return {"total": {}, "free": {}, "used": {}}
 
-    def place_order(self, symbol: str, side: str, amount: float, price: float = None, order_type: str = "market") -> Dict[str, Any]:
+    def place_order(self, symbol: str, side: str, amount: float, price: float = None, order_type: str = "market", **kwargs) -> Dict[str, Any]:
+    # optionally: use self._filter_kwargs_for / self.call_filtered when invoking self.client to avoid unexpected kwargs
         # Try ccxt-style create_order: create_order(symbol, type, side, amount, price, params={})
         if self._has_method("create_order"):
             try:

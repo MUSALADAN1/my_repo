@@ -1,0 +1,2 @@
+{"signal": "buy", "symbol": "BTC/USDT", "amount": 0.01, "price": 30000.0, "strategy": "test-strat"}
+{"signal": "sell", "symbol": "BTC/USDT", "strategy": "test-strat"}

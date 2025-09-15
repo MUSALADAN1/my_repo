@@ -1,0 +1,258 @@
+# bot_core/exchanges/mt5_adapter.py
+"""MT5 adapter implementing the BaseAdapter interface.
+
+Safe dry-run by default. Use config={'dry_run': False, ...} to enable live MT5 calls.
+"""
+
+from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
+import time
+
+# local utils
+from bot_core.exchanges.base_adapter import BaseAdapter, AdapterError
+from bot_core.exchanges.mt5_utils import rates_to_dataframe
+
+# optional dependency
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None  # type: ignore
+
+# mapping timeframes to safe integers (used when mt5 constants are unavailable)
+_MT5_TF_MAP = {
+    "1m": getattr(mt5, "TIMEFRAME_M1", 1) if mt5 else 1,
+    "5m": getattr(mt5, "TIMEFRAME_M5", 5) if mt5 else 5,
+    "15m": getattr(mt5, "TIMEFRAME_M15", 15) if mt5 else 15,
+    "30m": getattr(mt5, "TIMEFRAME_M30", 30) if mt5 else 30,
+    "1h": getattr(mt5, "TIMEFRAME_H1", 60) if mt5 else 60,
+    "4h": getattr(mt5, "TIMEFRAME_H4", 240) if mt5 else 240,
+    "1d": getattr(mt5, "TIMEFRAME_D1", 1440) if mt5 else 1440,
+}
+
+
+class MT5Adapter(BaseAdapter):
+    """Concrete adapter for MetaTrader5."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__(config=config)
+        self.dry_run = bool(self.config.get("dry_run", True))
+        self._connected = False
+
+    # ---------- Connection lifecycle ----------
+    def connect(self) -> None:
+        if self.dry_run:
+            self._connected = True
+            return
+        if mt5 is None:
+            raise AdapterError("MetaTrader5 package not available (mt5 import failed).")
+        terminal = self.config.get("terminal")
+        login = self.config.get("login")
+        password = self.config.get("password")
+        server = self.config.get("server")
+        try:
+            if terminal:
+                ok = mt5.initialize(terminal)
+            else:
+                ok = mt5.initialize()
+            if not ok and login and password:
+                ok = mt5.initialize(login=int(login), server=server, password=str(password))
+            if not ok:
+                raise AdapterError("MT5 initialization failed (mt5.initialize returned False).")
+            self._connected = True
+        except Exception as exc:
+            raise AdapterError(f"MT5 connect failed: {exc}")
+
+    def disconnect(self) -> None:
+        if self.dry_run:
+            self._connected = False
+            return
+        try:
+            if mt5:
+                mt5.shutdown()
+            self._connected = False
+        except Exception as exc:
+            raise AdapterError(f"MT5 disconnect failed: {exc}")
+
+    def is_connected(self) -> bool:
+        if self.dry_run:
+            return self._connected
+        if mt5:
+            try:
+                return bool(mt5.initialize())
+            except Exception:
+                return False
+        return False
+
+    # ---------- Market data ----------
+    def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {
+                "symbol": symbol,
+                "bid": 1.0,
+                "ask": 1.0002,
+                "last": 1.0001,
+                "timestamp": int(time.time() * 1000),
+            }
+        if mt5 is None:
+            raise AdapterError("MT5 API unavailable.")
+        try:
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                raise AdapterError(f"Symbol not found in MT5: {symbol}")
+            return {
+                "symbol": symbol,
+                "bid": float(tick.bid),
+                "ask": float(tick.ask),
+                "last": float(getattr(tick, "last", tick.bid)),
+                "timestamp": int(time.time() * 1000),
+            }
+        except Exception as exc:
+            raise AdapterError(f"fetch_ticker failed: {exc}")
+
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: str,
+        since: Optional[int] = None,
+        limit: Optional[int] = 1000,
+        as_dataframe: bool = False,
+    ) -> Union[List[Dict[str, Any]], "pd.DataFrame"]:
+        """Fetch OHLCV candles. Return list of dicts by default or pandas.DataFrame if as_dataframe=True."""
+        # Dry-run: return sample data for tests
+        if self.dry_run:
+            now_ms = int(time.time() * 1000)
+            sample = [
+                {"timestamp": now_ms - 60000 * 2, "open": 1.1000, "high": 1.1010, "low": 1.0990, "close": 1.1005, "volume": 10},
+                {"timestamp": now_ms - 60000 * 1, "open": 1.1005, "high": 1.1015, "low": 1.1000, "close": 1.1010, "volume": 8},
+                {"timestamp": now_ms, "open": 1.1010, "high": 1.1020, "low": 1.1005, "close": 1.1015, "volume": 12},
+            ]
+            return rates_to_dataframe(sample) if as_dataframe else sample
+
+        if mt5 is None:
+            raise AdapterError("MT5 API unavailable.")
+        tf = _MT5_TF_MAP.get(timeframe, _MT5_TF_MAP.get("1m"))
+        try:
+            if since:
+                dt_from = datetime.utcfromtimestamp(since / 1000)
+                rates = mt5.copy_rates_from(symbol, tf, dt_from, int(limit))
+            else:
+                rates = mt5.copy_rates_from_pos(symbol, tf, 0, int(limit))
+            if rates is None:
+                return rates_to_dataframe([]) if as_dataframe else []
+            candles = []
+            for r in rates:
+                # r typically: (time, open, high, low, close, tick_volume, spread, real_volume)
+                candles.append(
+                    {
+                        "timestamp": int(r[0] * 1000),
+                        "open": float(r[1]),
+                        "high": float(r[2]),
+                        "low": float(r[3]),
+                        "close": float(r[4]),
+                        "volume": float(r[5]) if len(r) > 5 else 0.0,
+                    }
+                )
+            return rates_to_dataframe(candles) if as_dataframe else candles
+        except Exception as exc:
+            raise AdapterError(f"fetch_ohlcv failed: {exc}")
+
+    # ---------- Account / positions ----------
+    def fetch_balance(self) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"account": {"balance": 10000.0, "equity": 10000.0, "margin": 0.0}}
+        if mt5 is None:
+            raise AdapterError("MT5 API unavailable.")
+        try:
+            info = mt5.account_info()
+            if info is None:
+                raise AdapterError("Failed to get account info from MT5.")
+            return {"account": {"balance": float(info.balance), "equity": float(info.equity), "margin": float(info.margin)}}
+        except Exception as exc:
+            raise AdapterError(f"fetch_balance failed: {exc}")
+
+    def fetch_positions(self) -> List[Dict[str, Any]]:
+        if self.dry_run:
+            return []
+        if mt5 is None:
+            raise AdapterError("MT5 API unavailable.")
+        try:
+            pos = mt5.positions_get()
+            if pos is None:
+                return []
+            positions = []
+            for p in pos:
+                positions.append(
+                    {
+                        "ticket": int(p.ticket),
+                        "symbol": p.symbol,
+                        "volume": float(p.volume),
+                        "price_open": float(p.price_open),
+                        "profit": float(p.profit),
+                        "type": int(p.type),
+                    }
+                )
+            return positions
+        except Exception as exc:
+            raise AdapterError(f"fetch_positions failed: {exc}")
+
+    # ---------- Orders ----------
+    def create_order(self, symbol: str, side: str, type: str, amount: float, price: Optional[float] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        params = params or {}
+        if self.dry_run:
+            return {"id": f"dry-{int(time.time())}", "symbol": symbol, "side": side, "type": type, "amount": amount, "price": price, "status": "open", "info": "dry_run"}
+        if mt5 is None:
+            raise AdapterError("MT5 API unavailable.")
+        try:
+            if type == "market":
+                action = mt5.TRADE_ACTION_DEAL
+                order_type = mt5.ORDER_TYPE_BUY if side.lower() == "buy" else mt5.ORDER_TYPE_SELL
+            else:
+                action = mt5.TRADE_ACTION_PENDING
+                order_type = mt5.ORDER_TYPE_BUY_LIMIT if side.lower() == "buy" else mt5.ORDER_TYPE_SELL_LIMIT
+            request = {
+                "action": action,
+                "symbol": symbol,
+                "volume": float(amount),
+                "type": order_type,
+                "price": float(price) if price is not None else 0.0,
+                "sl": float(params.get("stop_loss", 0.0)),
+                "tp": float(params.get("take_profit", 0.0)),
+                "deviation": int(params.get("deviation", 20)),
+                "magic": int(params.get("magic", 0)),
+                "comment": params.get("comment", "mt5_adapter"),
+            }
+            result = mt5.order_send(request)
+            if result is None:
+                raise AdapterError("mt5.order_send returned None.")
+            return {"id": getattr(result, "order", getattr(result, "request_id", "unknown")), "status": getattr(result, "retcode", "unknown"), "raw": result}
+        except Exception as exc:
+            raise AdapterError(f"create_order failed: {exc}")
+
+    def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"id": order_id, "status": "canceled", "info": "dry_run"}
+        if mt5 is None:
+            raise AdapterError("MT5 API unavailable.")
+        # Cancellation for live MT5 requires ticket-handling logic; keep conservative behavior for now.
+        raise AdapterError("cancel_order not implemented for live MT5 in this adapter (implement as needed).")
+
+    def fetch_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"id": order_id, "status": "open", "info": "dry_run"}
+        raise AdapterError("fetch_order not implemented for live MT5 in this adapter (implement as needed).")
+
+    def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        if self.dry_run:
+            return []
+        if mt5 is None:
+            raise AdapterError("MT5 API unavailable.")
+        try:
+            orders = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
+            if orders is None:
+                return []
+            out = []
+            for o in orders:
+                out.append({"ticket": int(o.ticket), "symbol": o.symbol, "price": float(getattr(o, 'price_open', 0.0)), "volume": float(getattr(o, 'volume', 0.0)), "type": int(getattr(o, 'type', 0))})
+            return out
+        except Exception as exc:
+            raise AdapterError(f"fetch_open_orders failed: {exc}")

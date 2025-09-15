@@ -1,0 +1,93 @@
+# backend/bot_controller.py
+from flask import Blueprint, request, jsonify
+import yaml
+import subprocess
+import os
+import MetaTrader5 as mt5
+from flask import jsonify
+
+bot_api = Blueprint('bot_api', __name__)
+bot_process = None
+
+# Paths to your core bot files
+CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                            '..', 'bot_core', 'config.yaml'))
+BOT_SCRIPT  = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                            '..', 'bot_core', 'intraday_trading_bot.py'))
+
+@bot_api.route('/start', methods=['POST'])
+def start_bot():
+    """
+    Launches the trading bot as a subprocess.
+    """
+    global bot_process
+    # If already running, reject
+    if bot_process and bot_process.poll() is None:
+        return jsonify({'status': 'already running'}), 400
+
+    # Start the bot script
+    bot_process = subprocess.Popen(['python', BOT_SCRIPT])
+    return jsonify({'status': 'started'})
+
+@bot_api.route('/stop', methods=['POST'])
+def stop_bot():
+    """
+    Terminates the trading bot process if it's running.
+    """
+    global bot_process
+    if not bot_process or bot_process.poll() is not None:
+        return jsonify({'status': 'not running'}), 400
+
+    bot_process.terminate()
+    return jsonify({'status': 'stopped'})
+
+@bot_api.route('/config', methods=['GET', 'POST'])
+def config():
+    """
+    GET: Read the YAML config and return as JSON.
+    POST: Overwrite the YAML config with the posted JSON.
+    """
+    if request.method == 'GET':
+        with open(CONFIG_PATH, 'r') as f:
+            cfg = yaml.safe_load(f)
+        return jsonify(cfg)
+
+    # POST
+    new_cfg = request.get_json()
+    with open(CONFIG_PATH, 'w') as f:
+        yaml.safe_dump(new_cfg, f)
+    return jsonify({'status': 'config updated'})
+@bot_api.route('/status', methods=['GET'])
+def status():
+    """
+    Returns current open positions and overall P/L.
+    """
+    try:
+        positions = mt5.positions_get() or []
+        total_pl = 0.0
+        pos_list = []
+
+        for pos in positions:
+            pl = pos.profit
+            total_pl += pl
+            tick = mt5.symbol_info_tick(pos.symbol)
+            current_price = (
+                tick.bid if pos.type == mt5.ORDER_TYPE_BUY 
+                else tick.ask
+            )
+
+            pos_list.append({
+                'symbol': pos.symbol,
+                'type': 'Buy' if pos.type == mt5.ORDER_TYPE_BUY else 'Sell',
+                'volume': pos.volume,
+                'price_open': pos.price_open,
+                'current_price': round(current_price, 5),
+                'profit': round(pl, 2)
+            })
+
+        return jsonify({
+            'total_pl': round(total_pl, 2),
+            'positions': pos_list
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

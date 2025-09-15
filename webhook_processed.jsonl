@@ -1,0 +1,5 @@
+{"event_id": "05dba009b5f1a584525e65d0cc678948fde33d796a2f3dbfee8f2594888b93d6", "ts": 1756239940.735329, "meta": {"status": "error", "reason": "broker_place_failed"}}
+{"event_id": "5bbd44888b96409b4db071e50bba57d09f68419d02cf19895450168353e697bd", "ts": 1756239940.7382412, "meta": {"status": "rejected", "reason": "no_matching_position"}}
+{"event_id": "fe0b25179993119be32101adaa6b7f8d245e949f752054334fb1e7fdde9b56cf", "ts": 1756239949.6183093, "meta": {"status": "error", "reason": "broker_place_failed"}}
+{"event_id": "f6d8527714499babc7d29ccb67278c32f60a7fc6eb350ea56e8a236c2699c1d3", "ts": 1756239949.6221209, "meta": {"status": "rejected", "reason": "no_matching_position"}}
+{"event_id": "761d87680bbbfa3144284d228dfae492ece68fe18c7763be2cd4093f2275b11e", "ts": 1756239953.5431628, "meta": {"status": "ok", "action": "buy", "pid": "evt-1756239953543-5e3b3392", "order_id": "fake-ord-1"}}

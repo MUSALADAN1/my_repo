@@ -2,6 +2,7 @@
 from typing import List, Dict, Any, Optional, Union, Type
 import importlib
 import pandas as pd
+import copy
 
 from bot_core.strategies.plugin_base import StrategyPlugin, StrategyContext
 
@@ -15,11 +16,16 @@ class StrategyManager:
     - register_strategy: accepts a StrategyPlugin subclass, an instance, or module path string.
     - initialize_all(broker): calls initialize(context) for each strategy.
     - run_backtest(broker, symbol, timeframe, limit): simple sequential feeder that
-       fetches OHLCV from broker and calls on_bar for each strategy with the cumulative DataFrame.
+       fetches OHLCV from broker.fetch_ohlcv() and calls on_bar for each strategy with the cumulative DataFrame.
     """
 
     def __init__(self):
         self.strategies: List[StrategyPlugin] = []
+        # in-memory metrics snapshot updated by runs
+        self.last_metrics: Dict[str, Any] = {
+            "signals_skipped_by_zone": 0,
+            "signals_skipped_by_zone_by_strategy": {}
+        }
 
     def _import_from_path(self, path: str):
         """
@@ -63,6 +69,34 @@ class StrategyManager:
         for s in self.strategies:
             s.initialize(ctx)
 
+    def _is_skip_signal(self, res: Dict[str, Any]) -> bool:
+        """
+        Heuristic to identify an explicit 'skip' marker returned by strategies.
+        Recognizes:
+         - res.get('skip') is truthy
+         - res.get('skipped') is truthy
+         - res.get('signal') == 'skip'
+         - res.get('reason') contains 'resistance'/'support'/'skip'
+        """
+        if not isinstance(res, dict):
+            return False
+        if res.get("skip") or res.get("skipped"):
+            return True
+        if res.get("signal") == "skip":
+            return True
+        reason = res.get("reason")
+        if isinstance(reason, str):
+            reason_l = reason.lower()
+            if "resistance" in reason_l or "support" in reason_l or "skip" in reason_l:
+                return True
+        return False
+
+    def _record_zone_skip(self, strategy_name: str):
+        self.last_metrics.setdefault("signals_skipped_by_zone", 0)
+        self.last_metrics["signals_skipped_by_zone"] += 1
+        by_strat = self.last_metrics.setdefault("signals_skipped_by_zone_by_strategy", {})
+        by_strat[strategy_name] = by_strat.get(strategy_name, 0) + 1
+
     def run_backtest(self, broker, symbol: str, timeframe: Any, limit: int = 500):
         """
         Very small deterministic backtest runner:
@@ -70,18 +104,18 @@ class StrategyManager:
         - iterates rows in chronological order, building a cumulative df slice,
           and calls each strategy.on_bar(cumulative_df)
         - collects (and returns) signals emitted by strategies (if any)
-        - collects metrics: signals_skipped_by_zone and per-strategy counts
+
+        While running, updates self.last_metrics with skip counters (zone-filtered signals).
         """
         df = broker.fetch_ohlcv(symbol, timeframe, limit=limit)
         if df is None or df.empty:
-            return {"status": "no_data", "signals": [], "metrics": {}}
+            return {"status": "no_data", "signals": [], "metrics": copy.deepcopy(self.last_metrics)}
+
+        # reset metrics for this run (we keep last_metrics as last snapshot)
+        self.last_metrics["signals_skipped_by_zone"] = 0
+        self.last_metrics["signals_skipped_by_zone_by_strategy"] = {}
 
         signals = []
-        metrics: Dict[str, Any] = {
-            "signals_skipped_by_zone": 0,
-            "signals_skipped_by_zone_by_strategy": {}
-        }
-
         # ensure df is sorted ascending by index
         df = df.sort_index()
 
@@ -90,38 +124,46 @@ class StrategyManager:
             for s in self.strategies:
                 try:
                     res = s.on_bar(window)
-                    # If a strategy returns an explicit "skipped_by_zone" marker (dict),
-                    # record metrics and also append an annotated entry to signals for visibility.
-                    if isinstance(res, dict) and res.get("skipped_by_zone"):
-                        res_meta = dict(res)
-                        res_meta.setdefault("strategy", s.name)
-                        res_meta.setdefault("bar_time", window.index[-1])
-                        res_meta.setdefault("skipped", True)
-                        signals.append(res_meta)
-                        # increment global and per-strategy counters
-                        metrics["signals_skipped_by_zone"] += 1
-                        metrics["signals_skipped_by_zone_by_strategy"].setdefault(s.name, 0)
-                        metrics["signals_skipped_by_zone_by_strategy"][s.name] += 1
-                        # optional hook (strategy-level)
-                        try:
-                            s.on_signal(res_meta)
-                        except Exception:
-                            pass
-                        # continue to next strategy
-                        continue
-
-                    # Normal signal handling
                     if isinstance(res, dict) and res:
+                        # detect skip signals (zone filtering or other skip markers)
+                        if self._is_skip_signal(res):
+                            # increment metrics but still keep a small record for visibility
+                            strat_name = getattr(s, "name", s.__class__.__name__)
+                            self._record_zone_skip(strat_name)
+                            res_meta = dict(res)
+                            res_meta.setdefault("strategy", strat_name)
+                            res_meta.setdefault("bar_time", window.index[-1])
+                            # indicate a skip marker so consumers can treat specially
+                            res_meta["skipped"] = True
+                            signals.append(res_meta)
+                            # optional hook
+                            try:
+                                s.on_signal(res_meta)
+                            except Exception:
+                                # ignore errors from on_signal hooks
+                                pass
+                            # do not treat as a normal trading signal
+                            continue
+
+                        # normal signal path
                         res_meta = dict(res)
-                        res_meta.setdefault("strategy", s.name)
+                        res_meta.setdefault("strategy", getattr(s, "name", s.__class__.__name__))
                         res_meta.setdefault("bar_time", window.index[-1])
                         signals.append(res_meta)
+                        # optional hook
                         try:
                             s.on_signal(res_meta)
                         except Exception:
                             pass
                 except Exception as e:
                     # do not stop other strategies; simply collect error info
-                    signals.append({"strategy": s.name, "error": str(e)})
+                    signals.append({"strategy": getattr(s, "name", s.__class__.__name__), "error": str(e)})
 
-        return {"status": "ok", "signals": signals, "metrics": metrics}
+        return {"status": "ok", "signals": signals, "metrics": copy.deepcopy(self.last_metrics)}
+
+    def get_metrics_snapshot(self) -> Dict[str, Any]:
+        """
+        Return a shallow copy of the last metrics snapshot. Safe for external callers
+        (e.g., status server) to include in API responses.
+        """
+        return copy.deepcopy(self.last_metrics or {})

@@ -88,9 +88,11 @@ class Broker:
 
         # No explicit connect — assume already connected / no-op
         return True
-    def place_order(self, symbol: str, side: str, amount: float, price: Optional[float] = None, order_type: str = "market", **kwargs) -> Dict[str, Any]:
+    def place_order(self, symbol: str, side: str, amount: float,
+                    price: Optional[float] = None, order_type: str = "market", **kwargs) -> Dict[str, Any]:
         """
-        Delegate safely to adapter.place_order. Filters unexpected kwargs based on adapter signature.
+        Delegate safely to adapter.place_order. Always filter unexpected kwargs via
+        _build_safe_call (so mocks that don't accept extra keys like 'cid' won't fail).
         Returns a normalized dict via _normalize_order_response and records to order_store (best-effort).
         """
         if self.adapter is None:
@@ -100,34 +102,20 @@ class Broker:
         if fn is None or not callable(fn):
             raise RuntimeError("adapter does not implement place_order")
 
-        # Try direct call first
-        try:
-            res = fn(symbol, side, amount, price, order_type, **kwargs)
-        except TypeError:
-            # Filter kwargs by inspecting signature
-            try:
-                import inspect
-                sig = inspect.signature(fn)
-                accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
-                if accepts_var_kw:
-                    call_kwargs = {**{"symbol": symbol, "side": side, "amount": amount, "price": price, "order_type": order_type}, **kwargs}
-                    res = fn(**call_kwargs)
-                else:
-                    allowed = {}
-                    combined = {**{"symbol": symbol, "side": side, "amount": amount, "price": price, "order_type": order_type}, **kwargs}
-                    for k in combined:
-                        if k in sig.parameters:
-                            allowed[k] = combined[k]
-                    # Try to call with positional or keyword depending on signature
-                    try:
-                        res = fn(**allowed)
-                    except TypeError:
-                        # Last-ditch: call by positional args (some adapters use positional-only)
-                        res = fn(symbol, side, amount, price, order_type)
-            except Exception:
-                # re-raise original TypeError for visibility if we couldn't adapt
-                raise
+        # Build safe callable which will only forward kwargs the adapter function accepts.
+        base_kwargs = {
+            "symbol": symbol,
+            "side": side,
+            "amount": amount,
+            "price": price,
+            "order_type": order_type
+        }
+        safe_call = self._build_safe_call(fn, base_kwargs, kwargs)
 
+        # Execute with retry/backoff (this will raise if all attempts fail)
+        res = _retry(safe_call)
+
+        # Normalize adapter response
         norm = self._normalize_order_response(res, side=side, symbol=symbol, amount=amount)
 
         # Ensure id exists
@@ -149,9 +137,11 @@ class Broker:
                 "raw": norm.get("raw"),
             })
         except Exception:
+            # ignore persistence errors
             pass
 
         return norm
+
     def fetch_order(self, order_id: str, symbol: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Fetch a single order by id. Try adapter.fetch_order(...) first, else fallback to local store.

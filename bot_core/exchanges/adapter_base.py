@@ -103,27 +103,35 @@ class ExchangeAdapter(ABC):
     # ---------------------------
     # Orders
     # ---------------------------
-    
-    def place_order(self, symbol: str, side: str, amount: float, price: float = None, order_type: str = "market", **kwargs) -> Dict[str, Any]:
-        """
-        Place an order; return a dict with at least 'id' and 'status'.
-        Accepts **kwargs defensively to avoid TypeErrors from callers passing extra metadata.
-        """
-        raise NotImplementedError
 
-    
-    def cancel_order(self, order_id: str, **kwargs) -> bool:
-        """Cancel given order_id; return True if cancelled."""
-        raise NotImplementedError
+    def place_order(self, symbol: str, side: str, amount: float, price: float = None,
+                    order_type: str = "market", **kwargs) -> Dict[str, Any]:
+        """
+        Place an order; default behavior:
+          - If adapter implements legacy `create_order` (some adapters do), call that.
+          - Otherwise raise NotImplementedError so callers can detect absence.
+        """
+        # support adapters that implement `create_order` (alternate naming)
+        create_fn = getattr(self, "create_order", None)
+        if callable(create_fn):
+            # map parameters to common create_order signature
+            params = kwargs.pop("params", None)
+            # create_order typically expects (symbol, side, type, amount, price, params)
+            return create_fn(symbol, side, order_type, amount, price, params or kwargs)
+        raise NotImplementedError("place_order not implemented for this adapter")
 
-    
+    def cancel_order(self, order_id: str, **kwargs) -> Dict[str, Any]:
+        """Cancel given order_id; default raises NotImplementedError."""
+        raise NotImplementedError("cancel_order not implemented for this adapter")
+
     def fetch_order(self, order_id: str, symbol: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """Fetch a single order by id."""
-        raise NotImplementedError
+        """Fetch a single order by id; default raises NotImplementedError."""
+        raise NotImplementedError("fetch_order not implemented for this adapter")
 
     def fetch_open_orders(self, symbol: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
-        """List open orders."""
-        raise NotImplementedError
+        """List open orders; default raises NotImplementedError."""
+        raise NotImplementedError("fetch_open_orders not implemented for this adapter")
+
 
     # ---------------------------
     # Utilities

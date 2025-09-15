@@ -1,0 +1,322 @@
+{
+  "summary": {
+    "total_matches": 75,
+    "files_with_matches": 7
+  },
+  "results": {
+    "test_strategy_ma_macd_stoch_mt5.py": [
+      {
+        "line": 7,
+        "text": "import MetaTrader5 as mt5"
+      },
+      {
+        "line": 15,
+        "text": "TIMEFRAME = mt5.TIMEFRAME_H1  # 1-hour candles"
+      },
+      {
+        "line": 23,
+        "text": "if not mt5.initialize():"
+      },
+      {
+        "line": 24,
+        "text": "raise SystemExit(f\"MT5 initialize() failed: {mt5.last_error()}\")"
+      },
+      {
+        "line": 27,
+        "text": "if not mt5.symbol_select(SYMBOL, True):"
+      },
+      {
+        "line": 31,
+        "text": "rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, N_BARS)"
+      },
+      {
+        "line": 33,
+        "text": "mt5.shutdown()"
+      },
+      {
+        "line": 43,
+        "text": "mt5.shutdown()"
+      }
+    ],
+    "backend\\bot_controller.py": [
+      {
+        "line": 6,
+        "text": "# Defensive MT5 import: do not fail at module import time if MetaTrader5 is absent."
+      },
+      {
+        "line": 9,
+        "text": "import MetaTrader5 as mt5  # type: ignore"
+      },
+      {
+        "line": 11,
+        "text": "# MetaTrader5 not available at import time \u2014 set to None and continue."
+      },
+      {
+        "line": 73,
+        "text": "positions = mt5.positions_get() or []"
+      },
+      {
+        "line": 80,
+        "text": "tick = mt5.symbol_info_tick(pos.symbol)"
+      },
+      {
+        "line": 82,
+        "text": "tick.bid if pos.type == mt5.ORDER_TYPE_BUY"
+      },
+      {
+        "line": 88,
+        "text": "'type': 'Buy' if pos.type == mt5.ORDER_TYPE_BUY else 'Sell',"
+      }
+    ],
+    "bot_core\\inspect_symbol.py": [
+      {
+        "line": 1,
+        "text": "# Defensive MT5 import: do not fail at module import time if MetaTrader5 is absent."
+      },
+      {
+        "line": 4,
+        "text": "import MetaTrader5 as mt5  # type: ignore"
+      },
+      {
+        "line": 6,
+        "text": "# MetaTrader5 not available at import time \u2014 set to None and continue."
+      },
+      {
+        "line": 13,
+        "text": "if not mt5.initialize():"
+      },
+      {
+        "line": 18,
+        "text": "info = mt5.symbol_info(symbol)"
+      },
+      {
+        "line": 23,
+        "text": "mt5.shutdown()"
+      },
+      {
+        "line": 33,
+        "text": "mt5.shutdown()"
+      }
+    ],
+    "bot_core\\intraday_trading_bot.py": [
+      {
+        "line": 2,
+        "text": "import MetaTrader5 as mt5"
+      },
+      {
+        "line": 264,
+        "text": "if not mt5.initialize():"
+      },
+      {
+        "line": 271,
+        "text": "if not mt5.symbol_select(sym, True):"
+      },
+      {
+        "line": 286,
+        "text": "# use mt5.copy_rates_from; if it raises or returns None -> empty"
+      },
+      {
+        "line": 287,
+        "text": "rates = mt5.copy_rates_from(sym, tf_map.get(tf), datetime.now(timezone.utc), int(bars))"
+      },
+      {
+        "line": 394,
+        "text": "tinfo = mt5.symbol_info_tick(sym)"
+      },
+      {
+        "line": 600,
+        "text": "tinfo = mt5.symbol_info_tick(sym)"
+      },
+      {
+        "line": 661,
+        "text": "for pos in mt5.positions_get() or []:"
+      },
+      {
+        "line": 664,
+        "text": "tick = mt5.symbol_info_tick(sym)"
+      },
+      {
+        "line": 680,
+        "text": "mt5.order_send({"
+      },
+      {
+        "line": 681,
+        "text": "'action': mt5.TRADE_ACTION_SLTP,"
+      },
+      {
+        "line": 686,
+        "text": "'type_time': mt5.ORDER_TIME_GTC,"
+      },
+      {
+        "line": 687,
+        "text": "'type_filling': mt5.ORDER_FILLING_IOC"
+      },
+      {
+        "line": 832,
+        "text": "tinfo = mt5.symbol_info_tick(sym)"
+      },
+      {
+        "line": 1053,
+        "text": "result = mt5.order_send(request)"
+      },
+      {
+        "line": 1105,
+        "text": "# Start trading loop (adapter is used indirectly for now; existing mt5.* calls still present)"
+      },
+      {
+        "line": 1111,
+        "text": "# NOTE: currently the rest of the code still uses mt5.* calls."
+      },
+      {
+        "line": 1113,
+        "text": "# For now, calling mt5.account_info() will still work if mt5 is available,"
+      },
+      {
+        "line": 1141,
+        "text": "mt5.shutdown()"
+      }
+    ],
+    "bot_core\\exchanges\\mt5_adapter.py": [
+      {
+        "line": 20,
+        "text": "Lazy import of MetaTrader5. Call this at runtime when you need mt5."
+      },
+      {
+        "line": 27,
+        "text": "import MetaTrader5 as mt5_module  # type: ignore"
+      },
+      {
+        "line": 47,
+        "text": "\"\"\"Concrete adapter for MetaTrader5.\"\"\""
+      },
+      {
+        "line": 60,
+        "text": "raise AdapterError(\"MetaTrader5 package not available (mt5 import failed).\")"
+      },
+      {
+        "line": 67,
+        "text": "ok = mt5.initialize(terminal)"
+      },
+      {
+        "line": 69,
+        "text": "ok = mt5.initialize()"
+      },
+      {
+        "line": 71,
+        "text": "ok = mt5.initialize(login=int(login), server=server, password=str(password))"
+      },
+      {
+        "line": 73,
+        "text": "raise AdapterError(\"MT5 initialization failed (mt5.initialize returned False).\")"
+      },
+      {
+        "line": 84,
+        "text": "mt5.shutdown()"
+      },
+      {
+        "line": 94,
+        "text": "return bool(mt5.initialize())"
+      },
+      {
+        "line": 112,
+        "text": "tick = mt5.symbol_info_tick(symbol)"
+      },
+      {
+        "line": 150,
+        "text": "rates = mt5.copy_rates_from(symbol, tf, dt_from, int(limit))"
+      },
+      {
+        "line": 152,
+        "text": "rates = mt5.copy_rates_from_pos(symbol, tf, 0, int(limit))"
+      },
+      {
+        "line": 179,
+        "text": "info = mt5.account_info()"
+      },
+      {
+        "line": 192,
+        "text": "pos = mt5.positions_get()"
+      },
+      {
+        "line": 220,
+        "text": "action = mt5.TRADE_ACTION_DEAL"
+      },
+      {
+        "line": 221,
+        "text": "order_type = mt5.ORDER_TYPE_BUY if side.lower() == \"buy\" else mt5.ORDER_TYPE_SELL"
+      },
+      {
+        "line": 223,
+        "text": "action = mt5.TRADE_ACTION_PENDING"
+      },
+      {
+        "line": 224,
+        "text": "order_type = mt5.ORDER_TYPE_BUY_LIMIT if side.lower() == \"buy\" else mt5.ORDER_TYPE_SELL_LIMIT"
+      },
+      {
+        "line": 237,
+        "text": "result = mt5.order_send(request)"
+      },
+      {
+        "line": 239,
+        "text": "raise AdapterError(\"mt5.order_send returned None.\")"
+      },
+      {
+        "line": 276,
+        "text": "raise AdapterError(\"MetaTrader5 package not available (mt5 import failed).\")"
+      },
+      {
+        "line": 282,
+        "text": "\"action\": mt5.TRADE_ACTION_MODIFY,"
+      },
+      {
+        "line": 290,
+        "text": "\"action\": mt5.TRADE_ACTION_SLTP,"
+      },
+      {
+        "line": 296,
+        "text": "res = mt5.order_send(req)"
+      },
+      {
+        "line": 298,
+        "text": "raise AdapterError(\"mt5.order_send returned None when modifying.\")"
+      },
+      {
+        "line": 333,
+        "text": "orders = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()"
+      }
+    ],
+    "bot_core\\exchanges\\mt5_utils.py": [
+      {
+        "line": 4,
+        "text": "This module intentionally avoids hard-dependencies at import time on MetaTrader5"
+      },
+      {
+        "line": 16,
+        "text": "into a safe integer constant for MT5. If MetaTrader5 package is installed,"
+      },
+      {
+        "line": 20,
+        "text": "int: numeric code (adapter will map to mt5.TIMEFRAME_* when available)."
+      },
+      {
+        "line": 46,
+        "text": "# Try numpy structured array (common with mt5.copy_rates_* result)"
+      },
+      {
+        "line": 80,
+        "text": "- numpy recarray returned by mt5.copy_rates_*."
+      }
+    ],
+    "tools\\scan_mt5_usages.py": [
+      {
+        "line": 3,
+        "text": "Scan the repository for direct 'mt5.' (and related) usages and emit a JSON"
+      },
+      {
+        "line": 15,
+        "text": "r\"import\\s+mt5\\b\",     # import mt5"
+      }
+    ]
+  }
+}
