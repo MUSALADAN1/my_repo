@@ -21,3 +21,36 @@ class BybitAdapter(ExchangeAdapter):
 
     def place_order(self, symbol: str, side: str, amount: float, price: float = None, order_type: str = "market") -> Dict[str, Any]:
         return {"id": "bybit-mock-1", "status": "filled", "symbol": symbol}
+    # --- compatibility wrappers added to satisfy tests (delegate to underlying client) ---
+    def cancel_order(self, *args, **kwargs):
+        """Cancel an order. Delegates to underlying client if available."""
+        client = getattr(self, "client", None)
+        if client is None:
+            raise NotImplementedError("cancel_order not implemented and no client available")
+        fn = getattr(client, "cancel_order", None) or getattr(client, "cancelOrder", None)
+        if fn is None:
+            raise NotImplementedError("underlying client has no cancel_order method")
+        return fn(*args, **kwargs)
+
+    def fetch_open_orders(self, *args, **kwargs):
+        """Return open orders. Delegates to underlying client if available."""
+        client = getattr(self, "client", None)
+        if client is None:
+            raise NotImplementedError("fetch_open_orders not implemented and no client available")
+        fn = getattr(client, "fetch_open_orders", None) or getattr(client, "fetchOpenOrders", None)
+        if fn is None:
+            fn = getattr(client, "fetch_orders", None) or getattr(client, "fetchOrders", None)
+            if fn is None:
+                raise NotImplementedError("underlying client has no fetch_open_orders/fetch_orders method")
+        return fn(*args, **kwargs)
+
+    def fetch_order(self, *args, **kwargs):
+        """Return a single order. Delegates to underlying client if available."""
+        client = getattr(self, "client", None)
+        if client is None:
+            raise NotImplementedError("fetch_order not implemented and no client available")
+        fn = getattr(client, "fetch_order", None) or getattr(client, "fetchOrder", None) or getattr(client, "fetch_order_info", None)
+        if fn is None:
+            raise NotImplementedError("underlying client has no fetch_order method")
+        return fn(*args, **kwargs)
+    # --- end wrappers ---
