@@ -1,0 +1,214 @@
+diff --git a/backend/exchanges/binance_adapter.py b/backend/exchanges/binance_adapter.py
+index f0ef29d..18d6ac5 100644
+--- a/backend/exchanges/binance_adapter.py
++++ b/backend/exchanges/binance_adapter.py
+@@ -109,3 +109,38 @@ class BinanceAdapter(ExchangeAdapter):
+ 
+         # Fallback simulated response
+         return {"id": "binance-mock-1", "status": "filled", "symbol": symbol, "side": side, "amount": amount, "price": price, "order_type": order_type}
++
++    # --- compatibility wrappers added to satisfy tests (delegate to underlying client) ---
++    def cancel_order(self, *args, **kwargs):
++        """Cancel an order. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("cancel_order not implemented and no client available")
++        fn = getattr(client, "cancel_order", None) or getattr(client, "cancelOrder", None)
++        if fn is None:
++            raise NotImplementedError("underlying client has no cancel_order method")
++        return fn(*args, **kwargs)
++
++    def fetch_open_orders(self, *args, **kwargs):
++        """Return open orders. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("fetch_open_orders not implemented and no client available")
++        fn = getattr(client, "fetch_open_orders", None) or getattr(client, "fetchOpenOrders", None)
++        if fn is None:
++            # Some clients expose fetch_orders instead
++            fn = getattr(client, "fetch_orders", None) or getattr(client, "fetchOrders", None)
++            if fn is None:
++                raise NotImplementedError("underlying client has no fetch_open_orders/fetch_orders method")
++        return fn(*args, **kwargs)
++
++    def fetch_order(self, *args, **kwargs):
++        """Return a single order. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("fetch_order not implemented and no client available")
++        fn = getattr(client, "fetch_order", None) or getattr(client, "fetchOrder", None) or getattr(client, "fetch_order_info", None)
++        if fn is None:
++            raise NotImplementedError("underlying client has no fetch_order method")
++        return fn(*args, **kwargs)
++    # --- end wrappers ---
+diff --git a/backend/exchanges/bybit_adapter.py b/backend/exchanges/bybit_adapter.py
+index be1883a..a40a386 100644
+--- a/backend/exchanges/bybit_adapter.py
++++ b/backend/exchanges/bybit_adapter.py
+@@ -21,3 +21,36 @@ class BybitAdapter(ExchangeAdapter):
+ 
+     def place_order(self, symbol: str, side: str, amount: float, price: float = None, order_type: str = "market") -> Dict[str, Any]:
+         return {"id": "bybit-mock-1", "status": "filled", "symbol": symbol}
++    # --- compatibility wrappers added to satisfy tests (delegate to underlying client) ---
++    def cancel_order(self, *args, **kwargs):
++        """Cancel an order. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("cancel_order not implemented and no client available")
++        fn = getattr(client, "cancel_order", None) or getattr(client, "cancelOrder", None)
++        if fn is None:
++            raise NotImplementedError("underlying client has no cancel_order method")
++        return fn(*args, **kwargs)
++
++    def fetch_open_orders(self, *args, **kwargs):
++        """Return open orders. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("fetch_open_orders not implemented and no client available")
++        fn = getattr(client, "fetch_open_orders", None) or getattr(client, "fetchOpenOrders", None)
++        if fn is None:
++            fn = getattr(client, "fetch_orders", None) or getattr(client, "fetchOrders", None)
++            if fn is None:
++                raise NotImplementedError("underlying client has no fetch_open_orders/fetch_orders method")
++        return fn(*args, **kwargs)
++
++    def fetch_order(self, *args, **kwargs):
++        """Return a single order. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("fetch_order not implemented and no client available")
++        fn = getattr(client, "fetch_order", None) or getattr(client, "fetchOrder", None) or getattr(client, "fetch_order_info", None)
++        if fn is None:
++            raise NotImplementedError("underlying client has no fetch_order method")
++        return fn(*args, **kwargs)
++    # --- end wrappers ---
+diff --git a/backend/exchanges/kucoin_adapter.py b/backend/exchanges/kucoin_adapter.py
+index 4aad336..4cc8ebd 100644
+--- a/backend/exchanges/kucoin_adapter.py
++++ b/backend/exchanges/kucoin_adapter.py
+@@ -21,3 +21,36 @@ class KuCoinAdapter(ExchangeAdapter):
+ 
+     def place_order(self, symbol: str, side: str, amount: float, price: float = None, order_type: str = "market") -> Dict[str, Any]:
+         return {"id": "kucoin-mock-1", "status": "filled", "symbol": symbol}
++    # --- compatibility wrappers added to satisfy tests (delegate to underlying client) ---
++    def cancel_order(self, *args, **kwargs):
++        """Cancel an order. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("cancel_order not implemented and no client available")
++        fn = getattr(client, "cancel_order", None) or getattr(client, "cancelOrder", None)
++        if fn is None:
++            raise NotImplementedError("underlying client has no cancel_order method")
++        return fn(*args, **kwargs)
++
++    def fetch_open_orders(self, *args, **kwargs):
++        """Return open orders. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("fetch_open_orders not implemented and no client available")
++        fn = getattr(client, "fetch_open_orders", None) or getattr(client, "fetchOpenOrders", None)
++        if fn is None:
++            fn = getattr(client, "fetch_orders", None) or getattr(client, "fetchOrders", None)
++            if fn is None:
++                raise NotImplementedError("underlying client has no fetch_open_orders/fetch_orders method")
++        return fn(*args, **kwargs)
++
++    def fetch_order(self, *args, **kwargs):
++        """Return a single order. Delegates to underlying client if available."""
++        client = getattr(self, "client", None)
++        if client is None:
++            raise NotImplementedError("fetch_order not implemented and no client available")
++        fn = getattr(client, "fetch_order", None) or getattr(client, "fetchOrder", None) or getattr(client, "fetch_order_info", None)
++        if fn is None:
++            raise NotImplementedError("underlying client has no fetch_order method")
++        return fn(*args, **kwargs)
++    # --- end wrappers ---
+diff --git a/backend/webhook_executor.py b/backend/webhook_executor.py
+index a38385c..ce1a091 100644
+--- a/backend/webhook_executor.py
++++ b/backend/webhook_executor.py
+@@ -186,8 +186,17 @@ def _retry_call(func: Callable, attempts: int = _ORDER_RETRY_ATTEMPTS,
+     """
+     last_exc = None
+     delay = base
++    # capture correlation info for logging (use these even if we remove them from kwargs)
+     cid = kwargs.get("cid", "-")
+     event_id = kwargs.get("event_id", "-")
++
++    # sanitize kwargs so we don't forward internal-only tracing keys (like 'cid' and 'event_id') to brokers
++    if kwargs:
++        sanitized_kwargs = dict(kwargs)
++        sanitized_kwargs.pop('cid', None)
++        sanitized_kwargs.pop('event_id', None)
++        kwargs = sanitized_kwargs
++
+     for attempt in range(1, attempts + 1):
+         try:
+             return func(*args, **kwargs)
+@@ -201,8 +210,7 @@ def _retry_call(func: Callable, attempts: int = _ORDER_RETRY_ATTEMPTS,
+             delay = min(delay * 2.0, maxi)
+     if last_exc:
+         raise last_exc
+-
+-
++    
+ def _extract_order_price_from(order: Any) -> Optional[float]:
+     """Best-effort extract numeric price from broker response dict/object."""
+     if order is None:
+diff --git a/bot_core/storage/order_store.py b/bot_core/storage/order_store.py
+index 7d3a439..a171027 100644
+--- a/bot_core/storage/order_store.py
++++ b/bot_core/storage/order_store.py
+@@ -64,7 +64,7 @@ class OrderStore:
+         """
+         oid = self.record_new_order(order)
+         return oid
+-
++    
+     def record_new_order(self, order: Dict[str, Any]) -> str:
+         """
+         Insert a new order record. order must include: id, symbol, side, amount, status (optional).
+@@ -73,7 +73,28 @@ class OrderStore:
+         oid = str(order.get("id") or order.get("order_id") or order.get("orderId") or "")
+         if not oid:
+             raise ValueError("order must include an 'id' field")
+-        # ... existing logic unchanged ...
++    
++        # normalize order fields
++        import json
++        import time
++        symbol = order.get('symbol') or order.get('symbol_id') or order.get('symbolId') or ''
++        side = order.get('side') or order.get('direction') or ''
++        try:
++            amount = float(order.get('amount') or order.get('qty') or 0)
++        except Exception:
++            amount = 0.0
++        try:
++            filled = float(order.get('filled', 0) or 0)
++        except Exception:
++            filled = 0.0
++        try:
++            price = float(order.get('price') or order.get('avg_price') or 0)
++        except Exception:
++            price = 0.0
++        status = order.get('status') or order.get('state') or ''
++        raw_json = json.dumps(order)
++        now = int(time.time())
++    
+         cur = self._conn.cursor()
+         cur.execute(
+             """
+@@ -84,10 +105,11 @@ class OrderStore:
+         )
+         self._conn.commit()
+         return oid
+-
++    
++    
+     # alias expected by some tests
+     def update_order(self, order_id: str, status: str, filled: Optional[float] = None,
+-                     price: Optional[float] = None, raw: Optional[Dict[str, Any]] = None) -> None:
++                    price: Optional[float] = None, raw: Optional[Dict[str, Any]] = None) -> None:
+         """Compatibility wrapper name used by tests and older code."""
+         return self.update_order_state(order_id, status, filled=filled, price=price, raw=raw)
+ 

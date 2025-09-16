@@ -1,0 +1,82 @@
+....F.....F..                                                            [100%]
+================================== FAILURES ===================================
+_________________________ test_create_and_basic_calls _________________________
+
+    def test_create_and_basic_calls():
+        for name in ["binance", "bybit", "kucoin", "mt5"]:
+>           adapter = create_adapter(name, {"api_key": "x", "api_secret": "y"})
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+test_exchange_adapters.py:6: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+backend\exchanges\__init__.py:227: in create_adapter
+    inst = _try_construct(cls, config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cls = <class 'backend.exchanges.bybit_adapter.BybitAdapter'>
+config = {'api_key': 'x', 'api_secret': 'y'}
+
+    def _try_construct(cls: Type, config: Optional[Dict[str, Any]] = None):
+        config = config or {}
+        try:
+            return cls(config)
+        except TypeError:
+            pass
+        if isinstance(config, dict):
+            try:
+                return cls(**config)
+            except TypeError:
+                pass
+        try:
+>           return cls()
+                   ^^^^^
+E           TypeError: Can't instantiate abstract class BybitAdapter without an implementation for abstract methods 'cancel_order', 'fetch_open_orders', 'fetch_order'
+
+backend\exchanges\__init__.py:64: TypeError
+_______________________ test_process_file_buy_and_sell ________________________
+
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-WANTED/pytest-3/test_process_file_buy_and_sell0')
+
+    def test_process_file_buy_and_sell(tmp_path):
+        events_file = tmp_path / "events.jsonl"
+        processed = tmp_path / "processed.jsonl"
+    
+        # buy event then sell event
+        buy_event = {"strategy": "ma_crossover", "signal": "buy", "symbol": "BTC/USDT", "amount": 0.5}
+        sell_event = {"strategy": "ma_crossover", "signal": "sell", "symbol": "BTC/USDT"}
+    
+        with open(events_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps(buy_event) + "\n")
+            f.write(json.dumps(sell_event) + "\n")
+    
+        broker = MockBroker()
+        rm = RiskManager(max_concurrent_deals=2, trailing_stop_pct=0.03, drawdown_alert_pct=0.2)
+        results = process_file(str(events_file), broker, rm, processed_path=str(processed))
+    
+        # Expect two results
+        assert len(results) == 2
+        # first should be buy ok
+>       assert results[0]["status"] == "ok" and results[0]["action"] == "buy"
+E       AssertionError: assert ('error' == 'ok'
+E         
+E         - ok
+E         + error)
+
+test_webhook_executor.py:34: AssertionError
+---------------------------- Captured stderr call -----------------------------
+{"ts":"2025-09-16 10:42:23,737","level":"INFO","cid":"fed7a002b1d5487a9161728cdfb6ca3b","event_id":"fe0b25179993119be32101adaa6b7f8d245e949f752054334fb1e7fdde9b56cf","msg":{"msg": "processing event", "extra": {"event": {"strategy": "ma_crossover", "signal": "buy", "symbol": "BTC/USDT", "amount": 0.5}}}}
+{"ts":"2025-09-16 10:42:23,738","level":"WARNING","cid":"fed7a002b1d5487a9161728cdfb6ca3b","event_id":"fe0b25179993119be32101adaa6b7f8d245e949f752054334fb1e7fdde9b56cf","msg":{"msg": "order call attempt 1 failed; retrying after 0.5s: MockBroker.place_order() got an unexpected keyword argument 'event_id'"}}
+{"ts":"2025-09-16 10:42:24,268","level":"WARNING","cid":"fed7a002b1d5487a9161728cdfb6ca3b","event_id":"fe0b25179993119be32101adaa6b7f8d245e949f752054334fb1e7fdde9b56cf","msg":{"msg": "order call attempt 2 failed; retrying after 1.0s: MockBroker.place_order() got an unexpected keyword argument 'event_id'"}}
+{"ts":"2025-09-16 10:42:25,273","level":"ERROR","cid":"fed7a002b1d5487a9161728cdfb6ca3b","event_id":"fe0b25179993119be32101adaa6b7f8d245e949f752054334fb1e7fdde9b56cf","msg":{"msg": "order call failed after 3 attempts: MockBroker.place_order() got an unexpected keyword argument 'event_id'"}}
+{"ts":"2025-09-16 10:42:25,276","level":"INFO","cid":"22ce5ad4760d4128b31247dcc21205be","event_id":"f6d8527714499babc7d29ccb67278c32f60a7fc6eb350ea56e8a236c2699c1d3","msg":{"msg": "processing event", "extra": {"event": {"strategy": "ma_crossover", "signal": "sell", "symbol": "BTC/USDT"}}}}
+------------------------------ Captured log call ------------------------------
+INFO     webhook_executor:webhook_executor.py:62 {"msg": "processing event", "extra": {"event": {"strategy": "ma_crossover", "signal": "buy", "symbol": "BTC/USDT", "amount": 0.5}}}
+WARNING  webhook_executor:webhook_executor.py:64 {"msg": "order call attempt 1 failed; retrying after 0.5s: MockBroker.place_order() got an unexpected keyword argument 'event_id'"}
+WARNING  webhook_executor:webhook_executor.py:64 {"msg": "order call attempt 2 failed; retrying after 1.0s: MockBroker.place_order() got an unexpected keyword argument 'event_id'"}
+ERROR    webhook_executor:webhook_executor.py:66 {"msg": "order call failed after 3 attempts: MockBroker.place_order() got an unexpected keyword argument 'event_id'"}
+INFO     webhook_executor:webhook_executor.py:62 {"msg": "processing event", "extra": {"event": {"strategy": "ma_crossover", "signal": "sell", "symbol": "BTC/USDT"}}}
+=========================== short test summary info ===========================
+FAILED test_exchange_adapters.py::test_create_and_basic_calls - TypeError: Ca...
+FAILED test_webhook_executor.py::test_process_file_buy_and_sell - AssertionEr...
+2 failed, 11 passed in 18.37s
