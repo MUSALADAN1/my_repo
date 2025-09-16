@@ -186,8 +186,15 @@ def _retry_call(func: Callable, attempts: int = _ORDER_RETRY_ATTEMPTS,
     """
     last_exc = None
     delay = base
+    # capture correlation info for logging (use these even if we remove them from kwargs)
     cid = kwargs.get("cid", "-")
     event_id = kwargs.get("event_id", "-")
+
+    # sanitize kwargs so we don't forward internal-only tracing keys (like 'cid') to brokers
+    if kwargs and 'cid' in kwargs:
+        kwargs = dict(kwargs)
+        kwargs.pop('cid', None)
+
     for attempt in range(1, attempts + 1):
         try:
             return func(*args, **kwargs)
@@ -201,6 +208,7 @@ def _retry_call(func: Callable, attempts: int = _ORDER_RETRY_ATTEMPTS,
             delay = min(delay * 2.0, maxi)
     if last_exc:
         raise last_exc
+
 
 
 def _extract_order_price_from(order: Any) -> Optional[float]:
