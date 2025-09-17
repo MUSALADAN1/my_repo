@@ -73,7 +73,26 @@ class OrderStore:
         oid = str(order.get("id") or order.get("order_id") or order.get("orderId") or "")
         if not oid:
             raise ValueError("order must include an 'id' field")
-        # ... existing logic unchanged ...
+
+        # normalize order fields
+        symbol = order.get('symbol') or order.get('symbol_id') or order.get('symbolId') or ''
+        side = order.get('side') or order.get('direction') or ''
+        try:
+            amount = float(order.get('amount') or order.get('qty') or order.get('size') or 0)
+        except Exception:
+            amount = 0.0
+        try:
+            filled = float(order.get('filled', 0) or 0)
+        except Exception:
+            filled = 0.0
+        try:
+            price = float(order.get('price') or order.get('avg_price') or 0)
+        except Exception:
+            price = 0.0
+        status = order.get('status') or order.get('state') or ''
+        raw_json = json.dumps(order, default=str)
+        now = int(time.time())
+
         cur = self._conn.cursor()
         cur.execute(
             """
@@ -85,9 +104,10 @@ class OrderStore:
         self._conn.commit()
         return oid
 
+
     # alias expected by some tests
     def update_order(self, order_id: str, status: str, filled: Optional[float] = None,
-                     price: Optional[float] = None, raw: Optional[Dict[str, Any]] = None) -> None:
+                    price: Optional[float] = None, raw: Optional[Dict[str, Any]] = None) -> None:
         """Compatibility wrapper name used by tests and older code."""
         return self.update_order_state(order_id, status, filled=filled, price=price, raw=raw)
 
