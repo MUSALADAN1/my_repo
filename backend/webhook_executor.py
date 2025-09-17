@@ -29,6 +29,12 @@ from typing import Dict, Any, List, Optional, Callable
 
 # Notifications (Telegram/Slack wrapper)
 from bot_core.notifications.async_notify import AsyncNotifier
+# Attempt to import the optional OCOManager; if unavailable, set to None.
+try:
+    from bot_core.order_managers.oco import OCOManager
+except Exception:
+    OCOManager = None
+
 
 # Build an async notifier from environment (dry_run if no creds)
 _notifier = AsyncNotifier.from_env(dry_run_if_no_creds=True)
