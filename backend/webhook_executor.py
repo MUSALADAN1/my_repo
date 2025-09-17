@@ -30,6 +30,11 @@ from typing import Dict, Any, List, Optional, Callable
 # Notifications (Telegram/Slack wrapper)
 from bot_core.notifications.async_notify import AsyncNotifier
 
+try:
+    from bot_core.order_managers.oco import OCOManager
+except Exception:
+    OCOManager = None
+
 # Build an async notifier from environment (dry_run if no creds)
 _notifier = AsyncNotifier.from_env(dry_run_if_no_creds=True)
 
@@ -232,8 +237,8 @@ def _extract_order_price_from(order: Any) -> Optional[float]:
         pass
     return None
 
-
-def process_event(event: Dict[str, Any], broker, risk_manager) -> Dict[str, Any]:
+# add this at top near other typing imports if not present
+def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Optional[Any] = None) -> Dict[str, Any]:
     """
     Idempotent processing of a single webhook event.
     Returns a result dict with 'event_id' and 'cid' included.
@@ -273,6 +278,51 @@ def process_event(event: Dict[str, Any], broker, risk_manager) -> Dict[str, Any]
         return res
 
     base_meta = {"event": event, "event_id": event_id, "cid": cid}
+
+        # --- OCO support: short-circuit if event asks to place OCO pair ---
+    try:
+        oco_payload = event.get("oco")
+    except Exception:
+        oco_payload = None
+
+    if oco_payload:
+        if OCOManager is None:
+            res = {"status": "error", "reason": "oco_manager_not_available", **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "oco_not_available"})
+            except Exception:
+                pass
+            return res
+
+        if oco_manager is None:
+            # create a local OCOManager bound to this broker
+            try:
+                oco_manager = OCOManager(broker)
+            except Exception as e:
+                res = {"status": "error", "reason": f"oco_init_failed: {e}", **base_meta}
+                try:
+                    _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "oco_init_failed"})
+                except Exception:
+                    pass
+                return res
+
+        primary = oco_payload.get("primary") or {}
+        secondary = oco_payload.get("secondary") or {}
+        try:
+            placed = oco_manager.place_oco(primary, secondary)
+            res = {"status": "ok", "action": "place_oco", "oco": placed, **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "ok", "action": "place_oco", "oco": placed})
+            except Exception:
+                pass
+            return res
+        except Exception as e:
+            res = {"status": "error", "reason": f"place_oco_failed: {e}", **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "place_oco_failed"})
+            except Exception:
+                pass
+            return res
 
     # Basic validation
     if not symbol or not signal:
@@ -489,7 +539,7 @@ def process_event(event: Dict[str, Any], broker, risk_manager) -> Dict[str, Any]
     return res
 
 
-def process_file(path: str, broker, risk_manager, processed_path: Optional[str] = None) -> List[Dict[str, Any]]:
+def process_file(path: str, broker, risk_manager, processed_path: Optional[str] = None, oco_manager: Optional[Any] = None) -> List[Dict[str, Any]]:
     """
     Process a jsonlines file where each line is a JSON event.
     If processed_path provided, append a JSON record for each processed event with result metadata.
@@ -518,9 +568,10 @@ def process_file(path: str, broker, risk_manager, processed_path: Optional[str] 
                 continue
 
             try:
-                r = process_event(event, broker, risk_manager)
+                r = process_event(event, broker, risk_manager, oco_manager=oco_manager)
             except Exception as e:
                 r = {"status": "error", "reason": f"executor exception: {e}", "event": event}
+
 
             results.append(r)
             if processed_path:
