@@ -9,9 +9,15 @@ class MockBroker:
         self.orders = {}
         self._counter = 0
         self.lock = threading.Lock()
+        # control fail counts per call index
+        self.fail_first_n = 0
+        self._calls = 0
 
     def place_order(self, symbol, side, amount, price=None, **kwargs):
         with self.lock:
+            self._calls += 1
+            if self._calls <= self.fail_first_n:
+                raise RuntimeError("temporary broker error")
             self._counter += 1
             oid = f"mord-{self._counter}"
             rec = {"id": oid, "symbol": symbol, "side": side, "amount": amount, "price": price}
@@ -21,10 +27,8 @@ class MockBroker:
 
 def test_background_twap_runs_to_completion():
     broker = MockBroker()
-    # no sleep between slices (fast)
     bg = BackgroundTWAPExecutor(broker, default_order_delay=0.0)
     job_id = bg.start_job("BTC/USDT", "buy", total_amount=1.0, slices=4, duration_seconds=0.0)
-    # wait for thread to complete (busy wait with timeout)
     start = time.time()
     while time.time() - start < 2.0:
         status = bg.get_status(job_id)
@@ -36,20 +40,33 @@ def test_background_twap_runs_to_completion():
     assert results is not None and len(results) == 4
 
 
+def test_background_twap_retry_on_transient_failure():
+    broker = MockBroker()
+    # first call will fail once, then succeed
+    broker.fail_first_n = 1
+    # set small retry base to keep test fast
+    bg = BackgroundTWAPExecutor(broker, default_order_delay=0.0, order_retry_attempts=3, order_retry_base=0.01, order_retry_max=0.02)
+    job_id = bg.start_job("BTC/USDT", "buy", total_amount=0.2, slices=2, duration_seconds=0.0)
+    start = time.time()
+    while time.time() - start < 2.0:
+        status = bg.get_status(job_id)
+        if status in ("completed", "failed"):
+            break
+        time.sleep(0.005)
+    assert bg.get_status(job_id) == "completed"
+    results = bg.get_results(job_id)
+    assert results is not None and len(results) == 2
+
+
 def test_background_twap_can_cancel_midway():
     broker = MockBroker()
-    # small delay so we can cancel while running
     bg = BackgroundTWAPExecutor(broker, default_order_delay=0.05)
     job_id = bg.start_job("ETH/USDT", "sell", total_amount=0.5, slices=10, duration_seconds=0.5)
-    # allow some slices to be placed
     time.sleep(0.12)
-    # cancel
     ok = bg.cancel_job(job_id)
     assert ok is True
-    # wait a short moment for worker to acknowledge cancel
     time.sleep(0.05)
     status = bg.get_status(job_id)
     assert status in ("canceled", "completed", "failed")
     results = bg.get_results(job_id)
-    # after cancel we must have placed at least 1 slice and fewer than total
     assert results is not None and 0 < len(results) < 10
