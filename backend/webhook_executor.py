@@ -254,67 +254,6 @@ def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Opti
     Returns a result dict with 'event_id' and 'cid' included.
     """
         # --- TWAP support: start background TWAP job if requested ---
-    try:
-        twap_payload = event.get("twap")
-    except Exception:
-        twap_payload = None
-
-    if twap_payload:
-        # Must have symbol and total_amount at minimum
-        tw_symbol = twap_payload.get("symbol") or symbol
-        tw_side = (twap_payload.get("side") or signal or "").lower()
-        tw_total = twap_payload.get("total_amount") or twap_payload.get("amount")
-        tw_slices = int(twap_payload.get("slices", 1))
-        tw_duration = float(twap_payload.get("duration_seconds", 0.0))
-        tw_price = twap_payload.get("price", price)
-        tw_extra = twap_payload.get("extra", {})
-
-        if not tw_symbol or tw_total is None or not tw_side:
-            res = {"status": "error", "reason": "invalid twap payload (missing symbol/side/total_amount)", **base_meta}
-            try:
-                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "invalid_twap_payload"})
-            except Exception:
-                pass
-            return res
-
-        # if executor not passed, try to build one from module using broker
-        if twap_executor is None:
-            if BackgroundTWAPExecutor is None:
-                res = {"status": "error", "reason": "twap_executor_not_available", **base_meta}
-                try:
-                    _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_not_available"})
-                except Exception:
-                    pass
-                return res
-            try:
-                twap_executor = BackgroundTWAPExecutor(broker)
-            except Exception as e:
-                res = {"status": "error", "reason": f"twap_executor_init_failed: {e}", **base_meta}
-                try:
-                    _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_init_failed"})
-                except Exception:
-                    pass
-                return res
-
-        try:
-            job_id = twap_executor.start_job(
-                symbol=tw_symbol, side=tw_side, total_amount=float(tw_total),
-                slices=tw_slices, duration_seconds=float(tw_duration), price=tw_price, extra=tw_extra
-            )
-            res = {"status": "ok", "action": "start_twap", "job_id": job_id, **base_meta}
-            try:
-                _PROCESSED_REGISTRY.add(event_id, {"status": "ok", "action": "start_twap", "job_id": job_id})
-            except Exception:
-                pass
-            return res
-        except Exception as e:
-            res = {"status": "error", "reason": f"twap_start_failed: {e}", **base_meta}
-            try:
-                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_start_failed"})
-            except Exception:
-                pass
-            return res
-
     if not isinstance(event, dict):
         return {"status": "error", "reason": "event must be a dict", "event": event}
 
@@ -355,6 +294,81 @@ def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Opti
         oco_payload = event.get("oco")
     except Exception:
         oco_payload = None
+            # --- TWAP support: start background TWAP job if requested ---
+    try:
+        twap_payload = event.get("twap")
+    except Exception:
+        twap_payload = None
+
+    if twap_payload:
+        # prefer explicit fields in the payload but fall back to parsed values
+        tw_symbol = twap_payload.get("symbol") or symbol
+        tw_side = (twap_payload.get("side") or signal or "").lower()
+        tw_total = twap_payload.get("total_amount") or twap_payload.get("amount")
+        try:
+            tw_slices = int(twap_payload.get("slices", 1))
+        except Exception:
+            tw_slices = 1
+        try:
+            tw_duration = float(twap_payload.get("duration_seconds", 0.0))
+        except Exception:
+            tw_duration = 0.0
+        tw_price = twap_payload.get("price", price)
+        tw_extra = twap_payload.get("extra", {})
+
+        # Validate minimal requirement
+        if (not tw_symbol) or (not tw_side) or (tw_total is None):
+            res = {"status": "error", "reason": "invalid twap payload (missing symbol/side/total_amount)", **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "invalid_twap_payload"})
+            except Exception:
+                pass
+            return res
+
+        # If executor not passed in, try to construct one from module
+        if twap_executor is None:
+            if BackgroundTWAPExecutor is None:
+                res = {"status": "error", "reason": "twap_executor_not_available", **base_meta}
+                try:
+                    _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_not_available"})
+                except Exception:
+                    pass
+                return res
+            try:
+                twap_executor = BackgroundTWAPExecutor(broker)
+            except Exception as e:
+                res = {"status": "error", "reason": f"twap_executor_init_failed: {e}", **base_meta}
+                try:
+                    _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_init_failed"})
+                except Exception:
+                    pass
+                return res
+
+        # start the TWAP job (executor API: start_job(...))
+        try:
+            job_id = twap_executor.start_job(
+                symbol=tw_symbol,
+                side=tw_side,
+                total_amount=float(tw_total),
+                slices=tw_slices,
+                duration_seconds=float(tw_duration),
+                price=tw_price,
+                extra=tw_extra,
+            )
+            res = {"status": "ok", "action": "start_twap", "job_id": job_id, **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "ok", "action": "start_twap", "job_id": job_id})
+            except Exception:
+                pass
+            return res
+        except Exception as e:
+            res = {"status": "error", "reason": f"twap_start_failed: {e}", **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_start_failed"})
+            except Exception:
+                pass
+            return res
+
 
     if oco_payload:
         if OCOManager is None:
