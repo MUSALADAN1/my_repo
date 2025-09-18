@@ -35,6 +35,13 @@ try:
 except Exception:
     OCOManager = None
 
+# near other imports (top of file)
+try:
+    from bot_core.execution.twap_bg import BackgroundTWAPExecutor
+except Exception:
+    BackgroundTWAPExecutor = None
+
+
 
 # Build an async notifier from environment (dry_run if no creds)
 _notifier = AsyncNotifier.from_env(dry_run_if_no_creds=True)
@@ -241,11 +248,73 @@ def _extract_order_price_from(order: Any) -> Optional[float]:
     return None
 
 
-def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Optional[Any] = None) -> Dict[str, Any]:
+def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Optional[Any] = None, twap_executor: Optional[Any] = None) -> Dict[str, Any]:
     """
     Idempotent processing of a single webhook event.
     Returns a result dict with 'event_id' and 'cid' included.
     """
+        # --- TWAP support: start background TWAP job if requested ---
+    try:
+        twap_payload = event.get("twap")
+    except Exception:
+        twap_payload = None
+
+    if twap_payload:
+        # Must have symbol and total_amount at minimum
+        tw_symbol = twap_payload.get("symbol") or symbol
+        tw_side = (twap_payload.get("side") or signal or "").lower()
+        tw_total = twap_payload.get("total_amount") or twap_payload.get("amount")
+        tw_slices = int(twap_payload.get("slices", 1))
+        tw_duration = float(twap_payload.get("duration_seconds", 0.0))
+        tw_price = twap_payload.get("price", price)
+        tw_extra = twap_payload.get("extra", {})
+
+        if not tw_symbol or tw_total is None or not tw_side:
+            res = {"status": "error", "reason": "invalid twap payload (missing symbol/side/total_amount)", **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "invalid_twap_payload"})
+            except Exception:
+                pass
+            return res
+
+        # if executor not passed, try to build one from module using broker
+        if twap_executor is None:
+            if BackgroundTWAPExecutor is None:
+                res = {"status": "error", "reason": "twap_executor_not_available", **base_meta}
+                try:
+                    _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_not_available"})
+                except Exception:
+                    pass
+                return res
+            try:
+                twap_executor = BackgroundTWAPExecutor(broker)
+            except Exception as e:
+                res = {"status": "error", "reason": f"twap_executor_init_failed: {e}", **base_meta}
+                try:
+                    _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_init_failed"})
+                except Exception:
+                    pass
+                return res
+
+        try:
+            job_id = twap_executor.start_job(
+                symbol=tw_symbol, side=tw_side, total_amount=float(tw_total),
+                slices=tw_slices, duration_seconds=float(tw_duration), price=tw_price, extra=tw_extra
+            )
+            res = {"status": "ok", "action": "start_twap", "job_id": job_id, **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "ok", "action": "start_twap", "job_id": job_id})
+            except Exception:
+                pass
+            return res
+        except Exception as e:
+            res = {"status": "error", "reason": f"twap_start_failed: {e}", **base_meta}
+            try:
+                _PROCESSED_REGISTRY.add(event_id, {"status": "error", "reason": "twap_start_failed"})
+            except Exception:
+                pass
+            return res
+
     if not isinstance(event, dict):
         return {"status": "error", "reason": "event must be a dict", "event": event}
 
@@ -312,9 +381,36 @@ def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Opti
         secondary = oco_payload.get("secondary") or {}
         try:
             placed = oco_manager.place_oco(primary, secondary)
-            res = {"status": "ok", "action": "place_oco", "oco": placed, **base_meta}
+
+            # Normalize placed -> ensure top-level primary_id / secondary_id are present when possible.
+            # Keep the original placed data under 'raw' for traceability.
+            oco_result = {}
+            # If placed is already a dict, copy it so we can augment; otherwise wrap it.
+            if isinstance(placed, dict):
+                oco_result = dict(placed)
+            else:
+                oco_result = {"raw": placed}
+
+            # best-effort extract ids from common shapes:
+            primary_id = oco_result.get("primary_id")
+            secondary_id = oco_result.get("secondary_id")
+
+            # sometimes place_oco returns nested dicts 'primary'/'secondary' with 'id'
+            if not primary_id:
+                p = oco_result.get("primary") or {}
+                primary_id = p.get("id") or p.get("order_id") or p.get("orderId")
+            if not secondary_id:
+                s = oco_result.get("secondary") or {}
+                secondary_id = s.get("id") or s.get("order_id") or s.get("orderId")
+
+            if primary_id:
+                oco_result["primary_id"] = primary_id
+            if secondary_id:
+                oco_result["secondary_id"] = secondary_id
+
+            res = {"status": "ok", "action": "place_oco", "oco": oco_result, **base_meta}
             try:
-                _PROCESSED_REGISTRY.add(event_id, {"status": "ok", "action": "place_oco", "oco": placed})
+                _PROCESSED_REGISTRY.add(event_id, {"status": "ok", "action": "place_oco", "oco": oco_result})
             except Exception:
                 pass
             return res
@@ -325,7 +421,6 @@ def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Opti
             except Exception:
                 pass
             return res
-
 
     # Basic validation
     if not symbol or not signal:
@@ -542,7 +637,7 @@ def process_event(event: Dict[str, Any], broker, risk_manager, oco_manager: Opti
     return res
 
 
-def process_file(path: str, broker, risk_manager, processed_path: Optional[str] = None, oco_manager: Optional[Any] = None) -> List[Dict[str, Any]]:
+def process_file(path: str, broker, risk_manager, processed_path: Optional[str] = None, oco_manager: Optional[Any] = None, twap_executor: Optional[Any] = None) -> List[Dict[str, Any]]:
     """
     Process a jsonlines file where each line is a JSON event.
     If processed_path provided, append a JSON record for each processed event with result metadata.
@@ -571,7 +666,7 @@ def process_file(path: str, broker, risk_manager, processed_path: Optional[str] 
                 continue
 
             try:
-                r = process_event(event, broker, risk_manager, oco_manager=oco_manager)
+                r = process_event(event, broker, risk_manager, oco_manager=oco_manager, twap_executor=twap_executor)
             except Exception as e:
                 r = {"status": "error", "reason": f"executor exception: {e}", "event": event}
 
