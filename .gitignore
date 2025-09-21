@@ -22,3 +22,7 @@ node_modules/
 *.sqlite
 *.xlsx
 *.log
+node_modules/
+*.sqlite
+*.xlsx
+*.log
