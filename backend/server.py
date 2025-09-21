@@ -3,25 +3,41 @@ from flask import Flask
 # import blueprints that already exist in your repo
 from backend.auth import bp as auth_bp
 from backend.billing import bp as billing_bp
-from backend import status_server as status_mod  # optional: reuse existing status_server app / functions
+from flask_cors import CORS
+
+# import the status_server module (it defines `app` and many routes)
+import backend.status_server as status_mod
 
 def create_app():
     app = Flask(__name__)
-    # register existing auth blueprint under /api/auth
+    CORS(app)                      
+    # register blueprints
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
-    # register billing blueprint under /api/billing
     app.register_blueprint(billing_bp, url_prefix="/api/billing")
 
-    # Optional: mount your standalone status_server as a route prefix
+    # ---- Mount routes from backend.status_server.app into this app ----
+    # status_mod.app is a Flask app module with routes defined directly.
+    # We iterate its rules and re-register the underlying view functions here.
     try:
-        # status_server is a module with a Flask app; we mount its routes onto this app by copying view functions
-        # If this fails, it's safe to ignore — this is an additive attempt only.
-        if hasattr(status_mod, "app"):
-            for rule in list(status_mod.app.url_map.iter_rules()):
-                # skip static or duplicated endpoints
-                pass
+        for rule in status_mod.app.url_map.iter_rules():
+            # skip static endpoints
+            if rule.endpoint == "static":
+                continue
+            # get the view function object (callable) from the status_server app
+            view_func = status_mod.app.view_functions.get(rule.endpoint)
+            if view_func is None:
+                continue
+            # create a unique endpoint name in our main app to avoid collisions
+            endpoint_name = f"status_{rule.endpoint}"
+            # add the same rule path and methods to our app, pointing at the same callable
+            # str(rule) yields the rule pattern (e.g. '/api/status')
+            app.add_url_rule(str(rule),
+                             endpoint=endpoint_name,
+                             view_func=view_func,
+                             methods=[m for m in rule.methods if m in ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")])
     except Exception:
-        pass
+        # don't fail startup if this copying fails — app still runs with your blueprints
+        app.logger.exception("Could not mount status_server routes into main app")
 
     return app
 
