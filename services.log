@@ -1,0 +1,11 @@
+nohup: ignoring input
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\USER\my_trading_bot\backend\cli\run_services.py", line 103, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "C:\Users\USER\my_trading_bot\backend\cli\run_services.py", line 60, in main
+    broker = cls(**broker_kwargs) if broker_kwargs else cls()
+             ~~~^^^^^^^^^^^^^^^^^
+TypeError: PaperBroker.__init__() got an unexpected keyword argument 'starting_balance'

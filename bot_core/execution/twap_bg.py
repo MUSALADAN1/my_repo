@@ -15,6 +15,7 @@ import hashlib
 from typing import Any, Callable, Dict, List, Optional
 
 
+
 class BackgroundTWAPExecutor:
     def __init__(self, broker,
                  default_order_delay: Optional[float] = None,
@@ -35,6 +36,7 @@ class BackgroundTWAPExecutor:
         self.place_order_fn = place_order_fn or getattr(broker, "place_order")
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        
 
         # retry settings
         self.order_retry_attempts = int(order_retry_attempts)
@@ -100,6 +102,7 @@ class BackgroundTWAPExecutor:
         }
         with self._lock:
             self._jobs[job_id] = job_meta
+            
 
         def _worker():
             try:
